@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/tvSend"
+        android:layout_width="50dp"
+        android:layout_height="wrap_content"
+        android:text="Data" />
+
+    <EditText
+        android:id="@+id/etSend"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_alignBaseline="@+id/tvSend"
+        android:layout_alignParentEnd="true"
+        android:layout_toEndOf="@+id/tvSend"
+        android:hint="Hello Com!"
+        android:inputType="text" />
+
+    <TextView
+        android:id="@+id/tvRecv"
+        android:layout_width="50dp"
+        android:layout_height="wrap_content"
+        android:layout_below="@+id/tvSend"
+        android:layout_marginTop="20dp"
+        android:text="MSG" />
+
+    <TextView
+        android:id="@+id/tvMsg"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_alignBaseline="@+id/tvRecv"
+        android:layout_alignParentEnd="true"
+        android:layout_toEndOf="@+id/tvRecv"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textColor="@color/black"
+        tools:text="message" />
+
+    <Button
+        android:id="@+id/btnOpen"
+        android:layout_width="125dp"
+        android:layout_height="wrap_content"
+        android:layout_below="@+id/tvMsg"
+        android:layout_centerHorizontal="true"
+        android:layout_marginTop="30dp"
+        android:text="Open"
+        android:textAllCaps="false" />
+
+    <Button
+        android:id="@+id/btnSend"
+        android:layout_width="125dp"
+        android:layout_height="wrap_content"
+        android:layout_below="@+id/btnOpen"
+        android:layout_centerHorizontal="true"
+        android:layout_marginTop="30dp"
+        android:text="Send"
+        android:textAllCaps="false" />
+
+    <Button
+        android:id="@+id/btnRecv"
+        android:layout_width="125dp"
+        android:layout_height="wrap_content"
+        android:layout_below="@+id/btnSend"
+        android:layout_centerHorizontal="true"
+        android:layout_marginTop="30dp"
+        android:text="Recv"
+        android:textAllCaps="false" />
+
+    <Button
+        android:id="@+id/btnClose"
+        android:layout_width="125dp"
+        android:layout_height="wrap_content"
+        android:layout_below="@+id/btnRecv"
+        android:layout_centerHorizontal="true"
+        android:layout_marginTop="30dp"
+        android:text="Close"
+        android:textAllCaps="false" />
+
+</RelativeLayout>

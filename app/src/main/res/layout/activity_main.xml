@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <com.google.android.flexbox.FlexboxLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="10dp"
+        app:flexWrap="wrap">
+
+        <Button
+            android:id="@+id/btn_func_picc"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="5dp"
+            android:text="Picc"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btn_func_icc"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="5dp"
+            android:text="Icc"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btn_func_msr"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="5dp"
+            android:text="Msr"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btn_func_sys"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="5dp"
+            android:text="Sys"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btn_func_print"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="5dp"
+            android:text="Printer"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btn_func_beacon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="5dp"
+            android:text="Beacon"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btn_func_scan"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="5dp"
+            android:text="Scan"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btn_func_com"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="5dp"
+            android:text="Com"
+            android:textAllCaps="false" />
+
+    </com.google.android.flexbox.FlexboxLayout>
+
+</LinearLayout>

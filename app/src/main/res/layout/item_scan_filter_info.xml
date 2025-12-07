@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <EditText
+        android:id="@+id/etMacAddress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="MAC Address(11:22:33:44:55:66)"
+        android:inputType="text" />
+
+    <EditText
+        android:id="@+id/etBroadcastName"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Broadcast Name"
+        android:inputType="text" />
+
+    <EditText
+        android:id="@+id/etRssi"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="RSSI(-)"
+        android:inputType="number" />
+
+    <EditText
+        android:id="@+id/etManufacturerId"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="ManufacturerId(hex string)"
+        android:inputType="text" />
+
+    <EditText
+        android:id="@+id/etData"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Data(limit max 32 hexstring)"
+        android:inputType="text" />
+
+</LinearLayout>

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
+    <uses-permission
+        android:name="android.permission.CHANGE_CONFIGURATION"
+        tools:ignore="ProtectedPermissions" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:requestLegacyExternalStorage="true"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.ApiDemo"
+        tools:targetApi="s">
+        <activity
+            android:name=".ComActivity"
+            android:exported="false"
+            android:label="Com" />
+        <activity
+            android:name=".barcode.BarcodeScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/CameraScanTheme" />
+        <activity
+            android:name=".barcode.QRCodeScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/CameraScanTheme" />
+        <activity
+            android:name=".ScanActivity"
+            android:exported="false"
+            android:label="Scan" />
+        <activity
+            android:name=".BeaconActivity"
+            android:exported="true"
+            android:label="Beacon">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".PrintActivity"
+            android:exported="false"
+            android:label="Printer" />
+        <activity
+            android:name=".SysActivity"
+            android:exported="false"
+            android:label="Sys" />
+        <activity
+            android:name=".MsrActivity"
+            android:exported="false"
+            android:label="Msr" />
+        <activity
+            android:name=".IccActivity"
+            android:exported="false"
+            android:label="Icc" />
+        <activity
+            android:name=".PiccActivity"
+            android:exported="false"
+            android:label="Picc" />
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
+
+        <receiver
+            android:name=".receiver.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

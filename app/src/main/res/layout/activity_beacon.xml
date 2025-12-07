@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <com.google.android.flexbox.FlexboxLayout
+        android:layout_width="match_parent"
+        android:layout_height="150dp"
+        android:layout_weight="1"
+        android:padding="1dp"
+        app:flexWrap="wrap">
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/BeaconMaster"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="BEACON/MASTER" />
+
+        <Button
+            android:id="@+id/btn_beacon_query"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="1dp"
+            android:text="Query"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btn_beacon_config"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="1dp"
+            android:text="Config"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btn_beacon_start"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="1dp"
+            android:text="Start"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btn_beacon_stop"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="1dp"
+            android:text="Stop"
+            android:textAllCaps="false" />
+        <Button
+            android:id="@+id/btn_master_scan_config"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="1dp"
+            android:text="@string/scan_config"
+            android:textAllCaps="false" />
+        <Button
+            android:id="@+id/btn_master_scan"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="1dp"
+            android:text="Scan"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btn_master_scanStop"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="1dp"
+            android:text="@string/stop_scan"
+            android:textAllCaps="false" />
+
+    </com.google.android.flexbox.FlexboxLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/grey" />
+
+    <TextView
+        android:id="@+id/tv_msg"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@color/snow"
+        android:padding="10dp"
+        android:scrollbars="vertical"
+        android:text="Hello Beacon!"
+        android:textSize="16sp" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recycler_view"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="4"
+        android:scrollbars="vertical"
+        android:textSize="12sp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        />
+</LinearLayout>
