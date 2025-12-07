@@ -928,9 +928,13 @@ private static JSONObject parsePayload(String payload) {
                                     // Auto set TRX channel if channels found
                                     if (!uuidResult.getChannels().isEmpty()) {
                                         // Use first writable channel (this may need adjustment)
-                                        bleConnection.setTrxChannel(1, 2, 0);
-                                        logBuilder.append("TRX Channel set\n");
-                                        tvReceivedLog.setText(logBuilder.toString());
+                                        for (BleConnection.UuidChannel channel: uuidResult.getChannels()) {
+                                            if (channel.uuid.equals("AB90785634127298EFCDAB9078563412")) {
+                                                bleConnection.setTrxChannel(channel.channelNum, channel.channelNum, 1);
+                                                logBuilder.append("TRX Channel set\n");
+                                                tvReceivedLog.setText(logBuilder.toString());
+                                            }
+                                        }
                                     }
                                 }
                             });
