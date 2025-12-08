@@ -390,7 +390,7 @@ public class BleConnection {
         Log.d(TAG, "Waiting to receive data (timeout: " + timeout + "ms)");
         byte[] response = new byte[2048];
         int[] len = new int[1];
-        int ret = At.Lib_ComRecvAT(response, len, timeout, 200);
+        int ret = At.Lib_ComRecvAT(response, len, timeout, 2048);
         Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + len[0]);
 
         if (ret != 0) {

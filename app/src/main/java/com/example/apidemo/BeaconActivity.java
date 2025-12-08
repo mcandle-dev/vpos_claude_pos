@@ -929,7 +929,7 @@ private static JSONObject parsePayload(String payload) {
                                     if (!uuidResult.getChannels().isEmpty()) {
                                         // Use first writable channel (this may need adjustment)
                                         for (BleConnection.UuidChannel channel: uuidResult.getChannels()) {
-                                            if (channel.uuid.equals("AB90785634127298EFCDAB9078563412")) {
+                                            if (channel.uuid.equals("DECA")) {
                                                 bleConnection.setTrxChannel(channel.channelNum, channel.channelNum, 1);
                                                 logBuilder.append("TRX Channel set\n");
                                                 tvReceivedLog.setText(logBuilder.toString());
@@ -964,7 +964,7 @@ private static JSONObject parsePayload(String payload) {
             btnSend.setEnabled(false);
 
             new Thread(() -> {
-                BleConnection.SendResult result = bleConnection.sendData(sendData.getBytes(), 3000);
+                BleConnection.SendResult result = bleConnection.sendData((sendData+"\r\n").getBytes(), 5000);
 
                 runOnUiThread(() -> {
                     btnSend.setEnabled(true);
@@ -979,20 +979,20 @@ private static JSONObject parsePayload(String payload) {
                 });
 
                 // Try to receive response
-                        BleConnection.ReceiveResult recvResult = bleConnection.receiveData(2000);
-                        if (recvResult.isSuccess() && recvResult.getData() != null) {
-                            String receivedData = new String(recvResult.getData());
-                            runOnUiThread(() -> {
-                                logBuilder.append("RX: ").append(receivedData).append("\n");
-                                tvReceivedLog.setText(logBuilder.toString());
-                            });
-                        } else if (!recvResult.isTimeout()) {
-                            // Only log error if it's not a timeout
-                            runOnUiThread(() -> {
-                                logBuilder.append("Receive error: ").append(recvResult.getError()).append("\n");
-                                tvReceivedLog.setText(logBuilder.toString());
-                            });
-                        }
+//                        BleConnection.ReceiveResult recvResult = bleConnection.receiveData(2000);
+//                        if (recvResult.isSuccess() && recvResult.getData() != null) {
+//                            String receivedData = new String(recvResult.getData());
+//                            runOnUiThread(() -> {
+//                                logBuilder.append("RX: ").append(receivedData).append("\n");
+//                                tvReceivedLog.setText(logBuilder.toString());
+//                            });
+//                        } else if (!recvResult.isTimeout()) {
+//                            // Only log error if it's not a timeout
+//                            runOnUiThread(() -> {
+//                                logBuilder.append("Receive error: ").append(recvResult.getError()).append("\n");
+//                                tvReceivedLog.setText(logBuilder.toString());
+//                            });
+//                        }
             }).start();
         });
 
