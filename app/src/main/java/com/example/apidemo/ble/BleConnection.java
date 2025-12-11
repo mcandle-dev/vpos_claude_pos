@@ -376,9 +376,9 @@ public class BleConnection {
             }
 
             // Wait for Connection Response
-            byte[] connectResponse = new byte[512];
+            byte[] connectResponse = new byte[2048];
             int[] connectLen = new int[1];
-            ret = At.Lib_ComRecvAT(connectResponse, connectLen, 3000, 512);
+            ret = At.Lib_ComRecvAT(connectResponse, connectLen, 3000, 2048);
             Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + connectLen[0]);
 
             if (ret != 0 || connectLen[0] == 0) {
@@ -670,7 +670,7 @@ public class BleConnection {
             for (UuidChannel channel : channels) {
                 String uuidLower = channel.uuid.toLowerCase();
                 // Check for specific mCandle write UUID (fff1 or f1ff)
-                if (uuidLower.contains("fff1") || uuidLower.contains("f1ff")) {
+                if (uuidLower.contains("f1ff")) {
                     writeChannel = channel;
                     Log.d(TAG, "✓ Found mCandle write channel: CH" + channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
                     break;
@@ -691,7 +691,7 @@ public class BleConnection {
             // Find read/notify channel (look for fff2/F2FF UUID suffix and Notify/Indicate property)
             for (UuidChannel channel : channels) {
                 // Check for specific mCandle read UUID AND ensure it has Notify/Indicate property
-                boolean hasCorrectUuid = channel.uuid.toLowerCase().contains("fff2") || channel.uuid.toUpperCase().contains("F2FF");
+                boolean hasCorrectUuid = channel.uuid.toLowerCase().contains("f1ff");
                 boolean hasNotifyProperty = channel.properties.contains("Notify") || channel.properties.contains("Indicate");
                 
                 if (hasCorrectUuid && hasNotifyProperty) {
@@ -755,6 +755,7 @@ public class BleConnection {
             
             // Determine write type (0=Without Response, 1=With Response)
             int writeType = writeChannel.properties.contains("Write Without Response") ? 0 : 1;
+            writeType = 1;
             
             // Log final channel selection with validation
             Log.d(TAG, "→ Final TRX Channel Configuration:");
@@ -1167,9 +1168,9 @@ public class BleConnection {
         }
         
         // Receive response
-        byte[] response = new byte[256];
+        byte[] response = new byte[2048];
         int[] len = new int[1];
-        ret = At.Lib_ComRecvAT(response, len, 3000, 256);
+        ret = At.Lib_ComRecvAT(response, len, 3000, 2048);
         Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + len[0]);
         
         if (ret != 0 || len[0] == 0) {
