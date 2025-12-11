@@ -105,6 +105,83 @@ public class BleConnection {
         this.testMode = testMode;
     }
 
+    public boolean setMasterMode(int timeout) {
+        Log.d(TAG, "\nSetting Master Mode...");
+        String roleCmd = "AT+ROLE=1\r\n";
+        Log.i(TAG, "[AT CMD] >>> " + roleCmd.trim());
+        int ret = At.Lib_ComSend(roleCmd.getBytes(), roleCmd.length());
+        Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+
+        if (ret != 0) {
+            Log.e(TAG, "Failed to send ROLE command, ret: " + ret);
+            return false;
+        }
+
+        byte[] roleResponse = new byte[256];
+        int[] roleLen = new int[1];
+        ret = At.Lib_ComRecvAT(roleResponse, roleLen, timeout, 256);
+        String roleResponseStr = new String(roleResponse, 0, roleLen[0]);
+        Log.i(TAG, "[AT RSP] <<< " + roleResponseStr.replace("\r\n", "\\r\\n"));
+
+        if (!roleResponseStr.contains("OK")) {
+            Log.e(TAG, "Failed to set Master mode");
+            return false;
+        }
+
+        return true;
+    }
+
+    public boolean setPairingMode(int timeout) {
+        Log.d(TAG, "\nSetting Pairing Mode (Just Works)...");
+        String pairCmd = "AT+MASTER_PAIR=3\r\n";
+        Log.i(TAG, "[AT CMD] >>> " + pairCmd.trim());
+        int ret = At.Lib_ComSend(pairCmd.getBytes(), pairCmd.length());
+        Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+
+        if (ret != 0) {
+            Log.e(TAG, "Failed to send pairing mode command, ret: " + ret);
+            return false;
+        }
+
+        byte[] pairResponse = new byte[256];
+        int[] pairLen = new int[1];
+        At.Lib_ComRecvAT(pairResponse, pairLen, timeout, 256);
+        String pairResponseStr = new String(pairResponse, 0, pairLen[0]);
+        Log.i(TAG, "[AT RSP] <<< " + pairResponseStr.replace("\r\n", "\\r\\n"));
+
+        if (!pairResponseStr.contains("OK")) {
+            Log.e(TAG, "Failed to set pairing mode");
+            return false;
+        }
+
+        return true;
+    }
+
+    public boolean setUuidScanMode(int timeout) {
+        Log.d(TAG, "\nEnabling UUID Scan (for auto UUID discovery)...");
+        String uuidScanCmd = "AT+UUID_SCAN=1\r\n";
+        Log.i(TAG, "[AT CMD] >>> " + uuidScanCmd.trim());
+        int ret = At.Lib_ComSend(uuidScanCmd.getBytes(), uuidScanCmd.length());
+        Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+
+        if (ret != 0) {
+            Log.e(TAG, "Failed to send UUID_SCAN command, ret: " + ret);
+            return false;
+        }
+
+        byte[] uuidScanResponse = new byte[128];
+        int[] uuidScanLen = new int[1];
+        At.Lib_ComRecvAT(uuidScanResponse, uuidScanLen, timeout, 128);
+        String uuidScanResponseStr = new String(uuidScanResponse, 0, uuidScanLen[0]);
+        Log.i(TAG, "[AT RSP] <<< " + uuidScanResponseStr.replace("\r\n", "\\r\\n"));
+
+        if (!uuidScanResponseStr.contains("OK")) {
+            Log.e(TAG, "UUID scan may have failed: " + uuidScanResponseStr);
+            return false;
+        }
+
+        return true;
+    }
     /**
      * Connect to a BLE device following BLE_GATT_Connection_Guide.md Steps 2-4
      *
@@ -123,233 +200,178 @@ public class BleConnection {
         Log.d(TAG, "Target MAC: " + macAddress);
 
         try {
-            // ====================================================================
-            // Debug: Check current connection list before connecting
-            // ====================================================================
-            Log.d(TAG, "\n[Debug] Checking current connection list...");
-            String cntListCmd = "AT+CNT_LIST\r\n";
-            Log.i(TAG, "[AT CMD] >>> " + cntListCmd.trim());
-            int ret = At.Lib_ComSend(cntListCmd.getBytes(), cntListCmd.length());
-
-            String cntResponseStr = null;
-            if (ret == 0) {
-                byte[] cntResponse = new byte[256];
-                int[] cntLen = new int[1];
-                ret = At.Lib_ComRecvAT(cntResponse, cntLen, 2000, 256);
-                cntResponseStr = new String(cntResponse, 0, cntLen[0]);
-                Log.i(TAG, "[AT RSP] <<< " + cntResponseStr.replace("\r\n", "\\r\\n"));
-            }
-
-            // ====================================================================
-            // Debug: Check BLE module status (may not be supported on all modules)
-            // ====================================================================
-            Log.d(TAG, "\n[Debug] Checking BLE module status...");
-            String statusCmd = "AT+STATUS?\r\n";
-            Log.i(TAG, "[AT CMD] >>> " + statusCmd.trim());
-            ret = At.Lib_ComSend(statusCmd.getBytes(), statusCmd.length());
-
-            if (ret == 0) {
-                byte[] statusResponse = new byte[256];
-                int[] statusLen = new int[1];
-                ret = At.Lib_ComRecvAT(statusResponse, statusLen, 2000, 256);
-                String statusResponseStr = new String(statusResponse, 0, statusLen[0]);
-                Log.i(TAG, "[AT RSP] <<< " + statusResponseStr.replace("\r\n", "\\r\\n"));
-
-                if (statusResponseStr.contains("ERROR")) {
-                    Log.w(TAG, "AT+STATUS not supported on this module (ignoring)");
-                }
-            }
-
-            // ====================================================================
-            // Disconnect any existing connections to ensure clean state
-            // ====================================================================
-            if (cntResponseStr != null && !cntResponseStr.trim().equals("AT+CNT_LIST=\r\nOK")) {
-                Log.d(TAG, "\n[Cleanup] Found existing connection(s), disconnecting...");
-
-                // Parse existing handles and disconnect them
-                Pattern handlePattern = Pattern.compile("(\\d+)\\s*\\(");
-                Matcher handleMatcher = handlePattern.matcher(cntResponseStr);
-
-                while (handleMatcher.find()) {
-                    try {
-                        int existingHandle = Integer.parseInt(handleMatcher.group(1));
-                        Log.d(TAG, "Disconnecting existing handle: " + existingHandle);
-
-                        boolean disconnected = false;
-
-                        // Strategy 1: Try AT+DISCONNECT=0,handle (slave disconnect - master initiates)
-                        String discCmd1 = "AT+DISCONNECT=1," + existingHandle + "\r\n";
-                        Log.i(TAG, "[AT CMD] >>> " + discCmd1.trim());
-                        ret = At.Lib_ComSend(discCmd1.getBytes(), discCmd1.length());
-
-                        if (ret == 0) {
-                            byte[] discResponse = new byte[256];
-                            int[] discLen = new int[1];
-                            ret = At.Lib_ComRecvAT(discResponse, discLen, 1000, 256);
-                            String discResponseStr = new String(discResponse, 0, discLen[0]);
-                            Log.i(TAG, "[AT RSP] <<< " + discResponseStr.replace("\r\n", "\\r\\n"));
-
-                            if (discResponseStr.contains("OK") || discResponseStr.contains("DISCONNECTED")) {
-                                Log.d(TAG, "✓ Successfully disconnected handle " + existingHandle + " (method 1)");
-                                disconnected = true;
-                            }
-                        }
-
-                        // Strategy 2: If first method failed, try AT+DISCE=handle
-                        if (!disconnected) {
-                            Thread.sleep(300);
-                            String discCmd2 = "AT+DISCE=" + existingHandle + "\r\n";
-                            Log.i(TAG, "[AT CMD] >>> " + discCmd2.trim() + " (trying alternative)");
-                            ret = At.Lib_ComSend(discCmd2.getBytes(), discCmd2.length());
-
-                            if (ret == 0) {
-                                byte[] discResponse2 = new byte[256];
-                                int[] discLen2 = new int[1];
-                                ret = At.Lib_ComRecvAT(discResponse2, discLen2, 2000, 256);
-                                String discResponseStr2 = new String(discResponse2, 0, discLen2[0]);
-                                Log.i(TAG, "[AT RSP] <<< " + discResponseStr2.replace("\r\n", "\\r\\n"));
-
-                                if (discResponseStr2.contains("OK") || discResponseStr2.contains("DISCONNECTED")) {
-                                    Log.d(TAG, "✓ Successfully disconnected handle " + existingHandle + " (method 2)");
-                                    disconnected = true;
-                                }
-                            }
-                        }
-
-                        if (!disconnected) {
-                            Log.w(TAG, "All disconnect methods failed for handle " + existingHandle + " - will try module reset");
-                        }
-
-                        // Wait between disconnects
-                        Thread.sleep(500);
-                    } catch (Exception e) {
-                        Log.w(TAG, "Failed to disconnect handle: " + e.getMessage());
-                    }
-                }
-
-                // Wait for disconnections to complete
-                Log.d(TAG, "Waiting for disconnections to complete...");
-                Thread.sleep(1000);
-
-                // ================================================================
-                // Strategy 3: If disconnects failed, force reset by switching roles
-                // Setting ROLE=0 will disconnect all active connections
-                // ================================================================
-                Log.d(TAG, "\n[Cleanup - Force Reset] Switching to Slave mode to clear all connections...");
-                String roleResetCmd = "AT+ROLE=0\r\n";
-                Log.i(TAG, "[AT CMD] >>> " + roleResetCmd.trim());
-                ret = At.Lib_ComSend(roleResetCmd.getBytes(), roleResetCmd.length());
-
-                if (ret == 0) {
-                    byte[] roleResetResponse = new byte[256];
-                    int[] roleResetLen = new int[1];
-                    ret = At.Lib_ComRecvAT(roleResetResponse, roleResetLen, 1000, 256);
-                    String roleResetResponseStr = new String(roleResetResponse, 0, roleResetLen[0]);
-                    Log.i(TAG, "[AT RSP] <<< " + roleResetResponseStr.replace("\r\n", "\\r\\n"));
-
-                    if (roleResetResponseStr.contains("OK")) {
-                        Log.d(TAG, "✓ BLE module reset to Slave mode (all connections cleared)");
-                        Thread.sleep(500);
-
-                        // Now verify connections are cleared
-                        String verifyClearCmd = "AT+CNT_LIST\r\n";
-                        Log.i(TAG, "[AT CMD] >>> " + verifyClearCmd.trim());
-                        ret = At.Lib_ComSend(verifyClearCmd.getBytes(), verifyClearCmd.length());
-
-                        if (ret == 0) {
-                            byte[] verifyClearResponse = new byte[256];
-                            int[] verifyClearLen = new int[1];
-                            ret = At.Lib_ComRecvAT(verifyClearResponse, verifyClearLen, 2000, 256);
-                            String verifyClearResponseStr = new String(verifyClearResponse, 0, verifyClearLen[0]);
-                            Log.i(TAG, "[AT RSP] <<< " + verifyClearResponseStr.replace("\r\n", "\\r\\n"));
-
-                            if (verifyClearResponseStr.contains("NULL")) {
-                                Log.d(TAG, "✓ Confirmed: All connections cleared");
-                            } else {
-                                Log.w(TAG, "Connections may still exist: " + verifyClearResponseStr);
-                            }
-                        }
-                    } else {
-                        Log.w(TAG, "Failed to reset module: " + roleResetResponseStr);
-                    }
-                }
-            }
+//            // ====================================================================
+//            // Debug: Check current connection list before connecting
+//            // ====================================================================
+//            Log.d(TAG, "\n[Debug] Checking current connection list...");
+//            String cntListCmd = "AT+CNT_LIST\r\n";
+//            Log.i(TAG, "[AT CMD] >>> " + cntListCmd.trim());
+//            int ret = At.Lib_ComSend(cntListCmd.getBytes(), cntListCmd.length());
+//
+//            String cntResponseStr = null;
+//            if (ret == 0) {
+//                byte[] cntResponse = new byte[256];
+//                int[] cntLen = new int[1];
+//                ret = At.Lib_ComRecvAT(cntResponse, cntLen, 2000, 256);
+//                cntResponseStr = new String(cntResponse, 0, cntLen[0]);
+//                Log.i(TAG, "[AT RSP] <<< " + cntResponseStr.replace("\r\n", "\\r\\n"));
+//            }
+//
+//            // ====================================================================
+//            // Debug: Check BLE module status (may not be supported on all modules)
+//            // ====================================================================
+//            Log.d(TAG, "\n[Debug] Checking BLE module status...");
+//            String statusCmd = "AT+STATUS?\r\n";
+//            Log.i(TAG, "[AT CMD] >>> " + statusCmd.trim());
+//            ret = At.Lib_ComSend(statusCmd.getBytes(), statusCmd.length());
+//
+//            if (ret == 0) {
+//                byte[] statusResponse = new byte[256];
+//                int[] statusLen = new int[1];
+//                ret = At.Lib_ComRecvAT(statusResponse, statusLen, 2000, 256);
+//                String statusResponseStr = new String(statusResponse, 0, statusLen[0]);
+//                Log.i(TAG, "[AT RSP] <<< " + statusResponseStr.replace("\r\n", "\\r\\n"));
+//
+//                if (statusResponseStr.contains("ERROR")) {
+//                    Log.w(TAG, "AT+STATUS not supported on this module (ignoring)");
+//                }
+//            }
+//
+//            // ====================================================================
+//            // Disconnect any existing connections to ensure clean state
+//            // ====================================================================
+//            if (cntResponseStr != null && !cntResponseStr.trim().equals("AT+CNT_LIST=\r\nOK")) {
+//                Log.d(TAG, "\n[Cleanup] Found existing connection(s), disconnecting...");
+//
+//                // Parse existing handles and disconnect them
+//                Pattern handlePattern = Pattern.compile("(\\d+)\\s*\\(");
+//                Matcher handleMatcher = handlePattern.matcher(cntResponseStr);
+//
+//                while (handleMatcher.find()) {
+//                    try {
+//                        int existingHandle = Integer.parseInt(handleMatcher.group(1));
+//                        Log.d(TAG, "Disconnecting existing handle: " + existingHandle);
+//
+//                        boolean disconnected = false;
+//
+//                        // Strategy 1: Try AT+DISCONNECT=0,handle (slave disconnect - master initiates)
+//                        String discCmd1 = "AT+DISCONNECT=1," + existingHandle + "\r\n";
+//                        Log.i(TAG, "[AT CMD] >>> " + discCmd1.trim());
+//                        ret = At.Lib_ComSend(discCmd1.getBytes(), discCmd1.length());
+//
+//                        if (ret == 0) {
+//                            byte[] discResponse = new byte[256];
+//                            int[] discLen = new int[1];
+//                            ret = At.Lib_ComRecvAT(discResponse, discLen, 1000, 256);
+//                            String discResponseStr = new String(discResponse, 0, discLen[0]);
+//                            Log.i(TAG, "[AT RSP] <<< " + discResponseStr.replace("\r\n", "\\r\\n"));
+//
+//                            if (discResponseStr.contains("OK") || discResponseStr.contains("DISCONNECTED")) {
+//                                Log.d(TAG, "✓ Successfully disconnected handle " + existingHandle + " (method 1)");
+//                                disconnected = true;
+//                            }
+//                        }
+//
+//                        // Strategy 2: If first method failed, try AT+DISCE=handle
+//                        if (!disconnected) {
+//                            Thread.sleep(300);
+//                            String discCmd2 = "AT+DISCE=" + existingHandle + "\r\n";
+//                            Log.i(TAG, "[AT CMD] >>> " + discCmd2.trim() + " (trying alternative)");
+//                            ret = At.Lib_ComSend(discCmd2.getBytes(), discCmd2.length());
+//
+//                            if (ret == 0) {
+//                                byte[] discResponse2 = new byte[256];
+//                                int[] discLen2 = new int[1];
+//                                ret = At.Lib_ComRecvAT(discResponse2, discLen2, 2000, 256);
+//                                String discResponseStr2 = new String(discResponse2, 0, discLen2[0]);
+//                                Log.i(TAG, "[AT RSP] <<< " + discResponseStr2.replace("\r\n", "\\r\\n"));
+//
+//                                if (discResponseStr2.contains("OK") || discResponseStr2.contains("DISCONNECTED")) {
+//                                    Log.d(TAG, "✓ Successfully disconnected handle " + existingHandle + " (method 2)");
+//                                    disconnected = true;
+//                                }
+//                            }
+//                        }
+//
+//                        if (!disconnected) {
+//                            Log.w(TAG, "All disconnect methods failed for handle " + existingHandle + " - will try module reset");
+//                        }
+//
+//                        // Wait between disconnects
+//                        Thread.sleep(500);
+//                    } catch (Exception e) {
+//                        Log.w(TAG, "Failed to disconnect handle: " + e.getMessage());
+//                    }
+//                }
+//
+//                // Wait for disconnections to complete
+//                Log.d(TAG, "Waiting for disconnections to complete...");
+//                Thread.sleep(1000);
+//
+//                // ================================================================
+//                // Strategy 3: If disconnects failed, force reset by switching roles
+//                // Setting ROLE=0 will disconnect all active connections
+//                // ================================================================
+//                Log.d(TAG, "\n[Cleanup - Force Reset] Switching to Slave mode to clear all connections...");
+//                String roleResetCmd = "AT+ROLE=0\r\n";
+//                Log.i(TAG, "[AT CMD] >>> " + roleResetCmd.trim());
+//                ret = At.Lib_ComSend(roleResetCmd.getBytes(), roleResetCmd.length());
+//
+//                if (ret == 0) {
+//                    byte[] roleResetResponse = new byte[256];
+//                    int[] roleResetLen = new int[1];
+//                    ret = At.Lib_ComRecvAT(roleResetResponse, roleResetLen, 1000, 256);
+//                    String roleResetResponseStr = new String(roleResetResponse, 0, roleResetLen[0]);
+//                    Log.i(TAG, "[AT RSP] <<< " + roleResetResponseStr.replace("\r\n", "\\r\\n"));
+//
+//                    if (roleResetResponseStr.contains("OK")) {
+//                        Log.d(TAG, "✓ BLE module reset to Slave mode (all connections cleared)");
+//                        Thread.sleep(500);
+//
+//                        // Now verify connections are cleared
+//                        String verifyClearCmd = "AT+CNT_LIST\r\n";
+//                        Log.i(TAG, "[AT CMD] >>> " + verifyClearCmd.trim());
+//                        ret = At.Lib_ComSend(verifyClearCmd.getBytes(), verifyClearCmd.length());
+//
+//                        if (ret == 0) {
+//                            byte[] verifyClearResponse = new byte[256];
+//                            int[] verifyClearLen = new int[1];
+//                            ret = At.Lib_ComRecvAT(verifyClearResponse, verifyClearLen, 2000, 256);
+//                            String verifyClearResponseStr = new String(verifyClearResponse, 0, verifyClearLen[0]);
+//                            Log.i(TAG, "[AT RSP] <<< " + verifyClearResponseStr.replace("\r\n", "\\r\\n"));
+//
+//                            if (verifyClearResponseStr.contains("NULL")) {
+//                                Log.d(TAG, "✓ Confirmed: All connections cleared");
+//                            } else {
+//                                Log.w(TAG, "Connections may still exist: " + verifyClearResponseStr);
+//                            }
+//                        }
+//                    } else {
+//                        Log.w(TAG, "Failed to reset module: " + roleResetResponseStr);
+//                    }
+//                }
+//            }
 
             // ====================================================================
             // Step 2: Set Master Mode (AT+ROLE=1)
             // ====================================================================
-            Log.d(TAG, "\n[Step 2] Setting Master Mode...");
-            String roleCmd = "AT+ROLE=1\r\n";
-            Log.i(TAG, "[AT CMD] >>> " + roleCmd.trim());
-            ret = At.Lib_ComSend(roleCmd.getBytes(), roleCmd.length());
-            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
-
-            if (ret != 0) {
-                Log.e(TAG, "Failed to send ROLE command, ret: " + ret);
-                return new ConnectionResult(false, null, "Failed to set Master mode: " + ret);
-            }
-
-            byte[] roleResponse = new byte[256];
-            int[] roleLen = new int[1];
-            ret = At.Lib_ComRecvAT(roleResponse, roleLen, 1000, 256);
-            String roleResponseStr = new String(roleResponse, 0, roleLen[0]);
-            Log.i(TAG, "[AT RSP] <<< " + roleResponseStr.replace("\r\n", "\\r\\n"));
-
-            if (!roleResponseStr.contains("OK")) {
-                Log.e(TAG, "Failed to set Master mode");
-                return new ConnectionResult(false, null, "Master mode response: " + roleResponseStr);
+            if (!setMasterMode(500)) {
+                return new ConnectionResult(false, null, "Failed to set Master mode");
             }
 
             // ====================================================================
-            // Step 4-1: Set Pairing Mode (AT+MASTER_PAIR=3)
+            // Step 3: Set Pairing Mode (AT+MASTER_PAIR=3)
             // ====================================================================
-            Log.d(TAG, "\n[Step 4-1] Setting Pairing Mode (Just Works)...");
-            String pairCmd = "AT+MASTER_PAIR=3\r\n";
-            Log.i(TAG, "[AT CMD] >>> " + pairCmd.trim());
-            ret = At.Lib_ComSend(pairCmd.getBytes(), pairCmd.length());
-            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
-
-            if (ret != 0) {
-                Log.e(TAG, "Failed to send pairing mode command, ret: " + ret);
-                return new ConnectionResult(false, null, "Failed to set pairing mode: " + ret);
-            }
-
-            byte[] pairResponse = new byte[256];
-            int[] pairLen = new int[1];
-            ret = At.Lib_ComRecvAT(pairResponse, pairLen, 3000, 256);
-            String pairResponseStr = new String(pairResponse, 0, pairLen[0]);
-            Log.i(TAG, "[AT RSP] <<< " + pairResponseStr.replace("\r\n", "\\r\\n"));
-
-            if (!pairResponseStr.contains("OK")) {
-                Log.e(TAG, "Failed to set pairing mode");
-                return new ConnectionResult(false, null, "Pairing mode response: " + pairResponseStr);
+            if (!setPairingMode(500)) {
+                return new ConnectionResult(false, null, "Failed to set pairing mode");
             }
 
             // ====================================================================
             // Step 4-1.5: Enable UUID Scan (AT+UUID_SCAN=1) - BEFORE CONNECT!
             // Must be enabled BEFORE AT+CONNECT to auto-print UUIDs when connecting
             // ====================================================================
-            Log.d(TAG, "\n[Step 4-1.5] Enabling UUID Scan (for auto UUID discovery)...");
-            String uuidScanCmd = "AT+UUID_SCAN=1\r\n";
-            Log.i(TAG, "[AT CMD] >>> " + uuidScanCmd.trim());
-            ret = At.Lib_ComSend(uuidScanCmd.getBytes(), uuidScanCmd.length());
-            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
-
-            if (ret != 0) {
-                Log.w(TAG, "Failed to send UUID_SCAN command, ret: " + ret);
-                // Don't fail - continue with connection
-            } else {
-                byte[] uuidScanResponse = new byte[128];
-                int[] uuidScanLen = new int[1];
-                ret = At.Lib_ComRecvAT(uuidScanResponse, uuidScanLen, 2000, 128);
-                String uuidScanResponseStr = new String(uuidScanResponse, 0, uuidScanLen[0]);
-                Log.i(TAG, "[AT RSP] <<< " + uuidScanResponseStr.replace("\r\n", "\\r\\n"));
-
-                if (uuidScanResponseStr.contains("OK")) {
-                    Log.d(TAG, "✓ UUID Scan enabled - UUIDs will be auto-discovered on connect");
-                } else {
-                    Log.w(TAG, "UUID scan may have failed: " + uuidScanResponseStr);
-                }
+            if (!setUuidScanMode(500)) {
+                return new ConnectionResult(false, null, "Failed to set uuid scna mode");
             }
 
             // ====================================================================
@@ -367,7 +389,7 @@ public class BleConnection {
             String connectCmd = "AT+CONNECT=," + macAddress + "\r\n";
             Log.i(TAG, "[AT CMD] >>> " + connectCmd.trim());
 
-            ret = At.Lib_ComSend(connectCmd.getBytes(), connectCmd.length());
+            int ret = At.Lib_ComSend(connectCmd.getBytes(), connectCmd.length());
             Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
 
             if (ret != 0) {
@@ -457,29 +479,29 @@ public class BleConnection {
             // ====================================================================
             // Step 4-3: Wait for connection to stabilize and verify it's still connected
             // ====================================================================
-            Log.d(TAG, "\n[Step 4-3] Waiting for connection to stabilize...");
-            Thread.sleep(1000); // Wait 1 second for connection to stabilize
-
-            // Verify connection is still active
-            Log.d(TAG, "\n[Step 4-4] Verifying connection stability...");
-            String verifyCmd = "AT+CNT_LIST\r\n";
-            Log.i(TAG, "[AT CMD] >>> " + verifyCmd.trim());
-            ret = At.Lib_ComSend(verifyCmd.getBytes(), verifyCmd.length());
-
-            if (ret == 0) {
-                byte[] verifyResponse = new byte[256];
-                int[] verifyLen = new int[1];
-                ret = At.Lib_ComRecvAT(verifyResponse, verifyLen, 2000, 256);
-                String verifyResponseStr = new String(verifyResponse, 0, verifyLen[0]);
-                Log.i(TAG, "[AT RSP] <<< " + verifyResponseStr.replace("\r\n", "\\r\\n"));
-
-                // Check if our handle is still in the connected list
-                if (!verifyResponseStr.contains(String.valueOf(handle))) {
-                    Log.e(TAG, "✗ Connection verification failed - Handle " + handle + " not in connected list");
-                    return new ConnectionResult(false, null,
-                        "Connection lost during stabilization. Device may have disconnected.");
-                }
-            }
+//            Log.d(TAG, "\n[Step 4-3] Waiting for connection to stabilize...");
+//            Thread.sleep(1000); // Wait 1 second for connection to stabilize
+//
+//            // Verify connection is still active
+//            Log.d(TAG, "\n[Step 4-4] Verifying connection stability...");
+//            String verifyCmd = "AT+CNT_LIST\r\n";
+//            Log.i(TAG, "[AT CMD] >>> " + verifyCmd.trim());
+//            ret = At.Lib_ComSend(verifyCmd.getBytes(), verifyCmd.length());
+//
+//            if (ret == 0) {
+//                byte[] verifyResponse = new byte[256];
+//                int[] verifyLen = new int[1];
+//                ret = At.Lib_ComRecvAT(verifyResponse, verifyLen, 2000, 256);
+//                String verifyResponseStr = new String(verifyResponse, 0, verifyLen[0]);
+//                Log.i(TAG, "[AT RSP] <<< " + verifyResponseStr.replace("\r\n", "\\r\\n"));
+//
+//                // Check if our handle is still in the connected list
+//                if (!verifyResponseStr.contains(String.valueOf(handle))) {
+//                    Log.e(TAG, "✗ Connection verification failed - Handle " + handle + " not in connected list");
+//                    return new ConnectionResult(false, null,
+//                        "Connection lost during stabilization. Device may have disconnected.");
+//                }
+//            }
 
             connectionHandle = handle;
             Log.d(TAG, "✓ Connection verified and stable with handle: " + handle);
@@ -625,27 +647,27 @@ public class BleConnection {
             // ====================================================================
             // Step 6: Check Connection Handle (AT+CNT_LIST)
             // ====================================================================
-            Log.d(TAG, "\n[Step 6] Checking Connection Handle...");
-            String cntListCmd = "AT+CNT_LIST\r\n";
-            Log.i(TAG, "[AT CMD] >>> " + cntListCmd.trim());
-            ret = At.Lib_ComSend(cntListCmd.getBytes(), cntListCmd.length());
-            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
-
-            if (ret != 0) {
-                Log.e(TAG, "Failed to send CNT_LIST command");
-                return new SendResult(false, "Failed to check connection: " + ret);
-            }
-
-            byte[] cntListResponse = new byte[512];
-            int[] cntListLen = new int[1];
-            ret = At.Lib_ComRecvAT(cntListResponse, cntListLen, 3000, 512);
-            String cntListResponseStr = new String(cntListResponse, 0, cntListLen[0]);
-            Log.i(TAG, "[AT RSP] <<< " + cntListResponseStr.replace("\r\n", "\\r\\n"));
-
-            if (!cntListResponseStr.contains(String.valueOf(connectionHandle))) {
-                Log.e(TAG, "Connection handle " + connectionHandle + " not found in device list");
-                return new SendResult(false, "Device not connected");
-            }
+//            Log.d(TAG, "\n[Step 6] Checking Connection Handle...");
+//            String cntListCmd = "AT+CNT_LIST\r\n";
+//            Log.i(TAG, "[AT CMD] >>> " + cntListCmd.trim());
+//            ret = At.Lib_ComSend(cntListCmd.getBytes(), cntListCmd.length());
+//            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+//
+//            if (ret != 0) {
+//                Log.e(TAG, "Failed to send CNT_LIST command");
+//                return new SendResult(false, "Failed to check connection: " + ret);
+//            }
+//
+//            byte[] cntListResponse = new byte[512];
+//            int[] cntListLen = new int[1];
+//            ret = At.Lib_ComRecvAT(cntListResponse, cntListLen, 3000, 512);
+//            String cntListResponseStr = new String(cntListResponse, 0, cntListLen[0]);
+//            Log.i(TAG, "[AT RSP] <<< " + cntListResponseStr.replace("\r\n", "\\r\\n"));
+//
+//            if (!cntListResponseStr.contains(String.valueOf(connectionHandle))) {
+//                Log.e(TAG, "Connection handle " + connectionHandle + " not found in device list");
+//                return new SendResult(false, "Device not connected");
+//            }
 
             // ====================================================================
             // Step 7: Set TRX Channel (AT+TRX_CHAN)
@@ -795,27 +817,27 @@ public class BleConnection {
             // ====================================================================
             // Step 8: Set Transparent Transmission Handle (AT+TTM_HANDLE)
             // ====================================================================
-            Log.d(TAG, "\n[Step 8] Setting Transparent Transmission Handle...");
-            String ttmCmd = "AT+TTM_HANDLE=" + connectionHandle + "\r\n";
-            Log.i(TAG, "[AT CMD] >>> " + ttmCmd.trim());
-            ret = At.Lib_ComSend(ttmCmd.getBytes(), ttmCmd.length());
-            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
-
-            if (ret != 0) {
-                Log.e(TAG, "Failed to send TTM_HANDLE command");
-                return new SendResult(false, "Failed to set TTM handle: " + ret);
-            }
-
-            byte[] ttmResponse = new byte[256];
-            int[] ttmLen = new int[1];
-            ret = At.Lib_ComRecvAT(ttmResponse, ttmLen, 3000, 256);
-            String ttmResponseStr = new String(ttmResponse, 0, ttmLen[0]);
-            Log.i(TAG, "[AT RSP] <<< " + ttmResponseStr.replace("\r\n", "\\r\\n"));
-
-            if (!ttmResponseStr.contains("OK")) {
-                Log.e(TAG, "Failed to set TTM handle");
-                return new SendResult(false, "TTM handle response: " + ttmResponseStr);
-            }
+//            Log.d(TAG, "\n[Step 8] Setting Transparent Transmission Handle...");
+//            String ttmCmd = "AT+TTM_HANDLE=" + connectionHandle + "\r\n";
+//            Log.i(TAG, "[AT CMD] >>> " + ttmCmd.trim());
+//            ret = At.Lib_ComSend(ttmCmd.getBytes(), ttmCmd.length());
+//            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+//
+//            if (ret != 0) {
+//                Log.e(TAG, "Failed to send TTM_HANDLE command");
+//                return new SendResult(false, "Failed to set TTM handle: " + ret);
+//            }
+//
+//            byte[] ttmResponse = new byte[256];
+//            int[] ttmLen = new int[1];
+//            ret = At.Lib_ComRecvAT(ttmResponse, ttmLen, 3000, 256);
+//            String ttmResponseStr = new String(ttmResponse, 0, ttmLen[0]);
+//            Log.i(TAG, "[AT RSP] <<< " + ttmResponseStr.replace("\r\n", "\\r\\n"));
+//
+//            if (!ttmResponseStr.contains("OK")) {
+//                Log.e(TAG, "Failed to set TTM handle");
+//                return new SendResult(false, "TTM handle response: " + ttmResponseStr);
+//            }
 
             // ====================================================================
             // Step 9: Send Data (AT+SEND)

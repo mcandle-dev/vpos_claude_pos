@@ -49,6 +49,8 @@ import vpos.apipackage.Com;
 
 public class BeaconActivity extends AppCompatActivity implements View.OnClickListener {
 
+    private static final String TAG = "BeaconActivity";
+
     private static final int RECORD_PROMPT_MSG = 0x06;
     private static final int SCAN_DATA_PROMPT_MSG = 0x08;
     private static final int STOP_SCAN_DATA_PROMPT_MSG = 0x10;
@@ -110,6 +112,13 @@ public class BeaconActivity extends AppCompatActivity implements View.OnClickLis
 //        newDeviceList.add(new Device("Device 1", "00:11:22:33:44:55", -60, "0000180F-0000-1000-8000-00805F9B34FB"));
 //        newDeviceList.add(new Device("Device 2", "AA:BB:CC:DD:EE:FF", -70, "0000180A-0000-1000-8000-00805F9B34FB"));
         deviceAdapter.setDeviceList(newDeviceList);
+
+        // BLE communication initialization
+//        BleConnection bleConnection = new BleConnection();
+//        Log.i(TAG, "BLE Connection Initialization");
+//        bleConnection.setMasterMode(1000);
+//        bleConnection.setPairingMode(3000);
+//        bleConnection.setUuidScanMode(2000);
     }
 
     private void initEvent() {
@@ -962,23 +971,23 @@ private static JSONObject parsePayload(String payload) {
                 });
 
                 // Optional: Try to receive response
-                if (result.isSuccess()) {
-                    BleConnection.ReceiveResult recvResult = bleConnection.receiveData(2000);
-                    if (recvResult.isSuccess() && recvResult.getData() != null) {
-                        String receivedData = new String(recvResult.getData());
-                        runOnUiThread(() -> {
-                            logBuilder.append("=== Response Received ===\n");
-                            logBuilder.append("RX: ").append(receivedData).append("\n\n");
-                            tvReceivedLog.setText(logBuilder.toString());
-                        });
-                    } else if (!recvResult.isTimeout()) {
-                        // Only log error if it's not a timeout
-                        runOnUiThread(() -> {
-                            logBuilder.append("Receive error: ").append(recvResult.getError()).append("\n\n");
-                            tvReceivedLog.setText(logBuilder.toString());
-                        });
-                    }
-                }
+//                if (result.isSuccess()) {
+//                    BleConnection.ReceiveResult recvResult = bleConnection.receiveData(2000);
+//                    if (recvResult.isSuccess() && recvResult.getData() != null) {
+//                        String receivedData = new String(recvResult.getData());
+//                        runOnUiThread(() -> {
+//                            logBuilder.append("=== Response Received ===\n");
+//                            logBuilder.append("RX: ").append(receivedData).append("\n\n");
+//                            tvReceivedLog.setText(logBuilder.toString());
+//                        });
+//                    } else if (!recvResult.isTimeout()) {
+//                        // Only log error if it's not a timeout
+//                        runOnUiThread(() -> {
+//                            logBuilder.append("Receive error: ").append(recvResult.getError()).append("\n\n");
+//                            tvReceivedLog.setText(logBuilder.toString());
+//                        });
+//                    }
+//                }
             }).start();
         });
 
