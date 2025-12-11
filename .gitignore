@@ -23,11 +23,6 @@ misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml
 
-# .idea
-.ieda/compiler.xml
-.idea/gradle.xml
-.idea/misc.xml
-
 # Keystore files
 *.jks
 *.keystore
