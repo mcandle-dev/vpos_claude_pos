@@ -682,109 +682,179 @@ public class BleConnection {
             // Service UUID: 0000fff0-0000-1000-8000-00805f9b34fb
             // Write UUID: 0000fff1-0000-1000-8000-00805f9b34fb
             // Read UUID: 0000fff2-0000-1000-8000-00805f9b34fb
-            
+
             // Channel selection for mCandle BLE App
             UuidChannel writeChannel = null;
             UuidChannel notifyChannel = null;
-            
-            // Find write channel - prioritize mCandle specific UUIDs (FFF1 or F1FF)
-            // Note: F1FF is little-endian representation of 0xFFF1
+
+            // ====================================================================
+            // Step 1: Try to find mCandle specific UUIDs (FFF1/FFF2)
+            // Support multiple representations: fff1, f1ff (little-endian)
+            // ====================================================================
+            Log.d(TAG, "→ Step 1: Searching for mCandle-specific UUIDs (FFF1/FFF2)...");
+
             for (UuidChannel channel : channels) {
                 String uuidLower = channel.uuid.toLowerCase();
-                // Check for specific mCandle write UUID (fff1 or f1ff)
-                if (uuidLower.contains("f1ff")) {
-                    writeChannel = channel;
-                    Log.d(TAG, "✓ Found mCandle write channel: CH" + channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
-                    break;
+
+                // Check for FFF1 (Write) - normalized search
+                if (uuidLower.contains("fff1") || uuidLower.contains("f1ff")) {
+                    if (channel.properties.contains("Write")) {
+                        writeChannel = channel;
+                        Log.d(TAG, "✓ Found mCandle write channel (FFF1): CH" + channel.channelNum +
+                              ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                    }
+                }
+
+                // Check for FFF2 (Notify/Indicate) - normalized search (fixed typo: was f1ff, now f2ff)
+                if (uuidLower.contains("fff2") || uuidLower.contains("f2ff")) {
+                    if (channel.properties.contains("Notify") || channel.properties.contains("Indicate")) {
+                        notifyChannel = channel;
+                        Log.d(TAG, "✓ Found mCandle notify channel (FFF2): CH" + channel.channelNum +
+                              ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                    }
                 }
             }
 
-            // Fallback: If no mCandle-specific UUID found, look for any write-capable channel
-            if (writeChannel == null) {
+            // ====================================================================
+            // Step 2: If FFF1/FFF2 not found, use 128-bit custom UUID strategy
+            // Exclude standard 16-bit UUIDs (2Axx, 2Bxx, etc.)
+            // ====================================================================
+            if (writeChannel == null || notifyChannel == null) {
+                Log.d(TAG, "→ Step 2: FFF1/FFF2 not found, searching for 128-bit custom UUIDs...");
+
+                // Helper: Check if UUID is a standard 16-bit service (e.g., 0000XXXX-0000-1000-8000-00805f9b34fb)
+                // Standard UUIDs have pattern: 0000[2A/2B]XX-0000-1000-8000-00805f9b34fb
                 for (UuidChannel channel : channels) {
-                    if (channel.properties.contains("Write")) {
-                        writeChannel = channel;
-                        Log.d(TAG, "✓ Found generic write channel: CH" + channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                    String uuidLower = channel.uuid.toLowerCase().replaceAll("-", "");
+
+                    // Check if it's a standard Bluetooth SIG UUID (starts with 0000 and has base UUID)
+                    boolean isStandardUuid = uuidLower.matches("0000[0-9a-f]{4}00001000800000805f9b34fb");
+
+                    // Additionally exclude known standard prefixes
+                    boolean isStandard16bit = uuidLower.startsWith("00002a") || // Standard characteristics
+                                             uuidLower.startsWith("00002b") || // GATT services
+                                             uuidLower.startsWith("00001800") || // Generic Access
+                                             uuidLower.startsWith("00001801") || // Generic Attribute
+                                             uuidLower.startsWith("0000180a") || // Device Information
+                                             uuidLower.startsWith("0000180f");   // Battery Service
+
+                    if (isStandardUuid || isStandard16bit) {
+                        Log.d(TAG, "  - Skipping standard UUID: CH" + channel.channelNum +
+                              ", UUID:" + channel.uuid + " (not custom)");
+                        continue;
+                    }
+
+                    // This is a custom 128-bit UUID - consider it as a candidate
+                    Log.d(TAG, "  - Found custom 128-bit UUID: CH" + channel.channelNum +
+                          ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+
+                    // Select TX channel: prioritize Write / Write Without Response
+                    if (writeChannel == null) {
+                        if (channel.properties.contains("Write Without Response") ||
+                            channel.properties.contains("Write")) {
+                            writeChannel = channel;
+                            Log.d(TAG, "✓ Selected custom TX channel: CH" + channel.channelNum +
+                                  ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                        }
+                    }
+
+                    // Select RX channel: prioritize Notify / Indicate
+                    if (notifyChannel == null) {
+                        if (channel.properties.contains("Notify") ||
+                            channel.properties.contains("Indicate")) {
+                            notifyChannel = channel;
+                            Log.d(TAG, "✓ Selected custom RX channel: CH" + channel.channelNum +
+                                  ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                        }
+                    }
+
+                    // Break early if both channels found
+                    if (writeChannel != null && notifyChannel != null) {
                         break;
                     }
                 }
             }
             
-            // Find read/notify channel (look for fff2/F2FF UUID suffix and Notify/Indicate property)
-            for (UuidChannel channel : channels) {
-                // Check for specific mCandle read UUID AND ensure it has Notify/Indicate property
-                boolean hasCorrectUuid = channel.uuid.toLowerCase().contains("f1ff");
-                boolean hasNotifyProperty = channel.properties.contains("Notify") || channel.properties.contains("Indicate");
-                
-                if (hasCorrectUuid && hasNotifyProperty) {
-                    notifyChannel = channel;
-                    Log.d(TAG, "✓ Found notify/read channel: CH" + channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
-                    break;
-                }
-            }
-            
-            // Fallback: If no specific fff2 channel found, look for any channel with Notify/Indicate property
-            if (notifyChannel == null) {
-                for (UuidChannel channel : channels) {
-                    if (channel.properties.contains("Notify") || channel.properties.contains("Indicate")) {
-                        notifyChannel = channel;
-                        Log.w(TAG, "⚠ Fallback: Using channel with Notify/Indicate: CH" + channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
-                        break;
-                    }
-                }
-            }
-            
-            // Fallback: Use first two channels if specific UUIDs not found
-            if (writeChannel == null && channels.size() >= 1) {
-                writeChannel = channels.get(0);
-                Log.w(TAG, "⚠ Fallback: Using first channel as write channel: CH" + writeChannel.channelNum + ", UUID:" + writeChannel.uuid);
-            }
-            
-            if (notifyChannel == null && channels.size() >= 2) {
-                notifyChannel = channels.get(1);
-                Log.w(TAG, "⚠ Fallback: Using second channel as notify channel: CH" + notifyChannel.channelNum + ", UUID:" + notifyChannel.uuid);
-            }
-            
+            // ====================================================================
+            // Step 3: Final validation and fallback
+            // ====================================================================
+            Log.d(TAG, "→ Step 3: Validating channel selection...");
+
             // Ensure we have at least a write channel
             if (writeChannel == null) {
-                Log.e(TAG, "❌ No write channel found! Cannot send data.");
-                return new SendResult(false, "No write channel found");
+                Log.e(TAG, "❌ No suitable write channel found!");
+                Log.e(TAG, "   Searched for: FFF1 UUID or custom 128-bit UUID with Write property");
+                Log.e(TAG, "   Excluded: Standard 16-bit UUIDs (2Axx, 2Bxx, 180x, etc.)");
+                return new SendResult(false, "No write channel found - only standard UUIDs available");
             }
-            
-            // Critical: Ensure notify channel has Notify/Indicate property
-            boolean notifyChannelValid = notifyChannel != null && 
-                                       (notifyChannel.properties.contains("Notify") || 
+
+            // Ensure notify channel has Notify/Indicate property
+            boolean notifyChannelValid = notifyChannel != null &&
+                                       (notifyChannel.properties.contains("Notify") ||
                                         notifyChannel.properties.contains("Indicate"));
-            
+
             if (!notifyChannelValid) {
-                // Find ANY channel with Notify/Indicate property as final fallback
+                Log.w(TAG, "⚠ No RX channel found via FFF2 or custom UUID search");
+                Log.w(TAG, "  → Attempting final fallback: ANY non-standard Notify/Indicate channel...");
+
+                // Last resort: Find ANY channel with Notify/Indicate (but still exclude standard UUIDs)
                 for (UuidChannel channel : channels) {
+                    String uuidLower = channel.uuid.toLowerCase().replaceAll("-", "");
+
+                    // Skip standard UUIDs even in final fallback
+                    boolean isStandardUuid = uuidLower.matches("0000[0-9a-f]{4}00001000800000805f9b34fb");
+                    boolean isStandard16bit = uuidLower.startsWith("00002a") ||
+                                             uuidLower.startsWith("00002b") ||
+                                             uuidLower.startsWith("00001800") ||
+                                             uuidLower.startsWith("00001801") ||
+                                             uuidLower.startsWith("0000180a") ||
+                                             uuidLower.startsWith("0000180f");
+
+                    if (isStandardUuid || isStandard16bit) {
+                        continue; // Skip standard UUIDs
+                    }
+
+                    // Use any custom UUID with Notify/Indicate
                     if (channel.properties.contains("Notify") || channel.properties.contains("Indicate")) {
                         notifyChannel = channel;
-                        Log.w(TAG, "⚠ Final fallback: Using channel with Notify/Indicate: CH" + channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                        Log.w(TAG, "✓ Final fallback: Using custom Notify/Indicate channel: CH" +
+                              channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
                         notifyChannelValid = true;
                         break;
                     }
                 }
-                
-                // If still no valid notify channel, use write channel (but log warning)
+
+                // If STILL no valid notify channel, use write channel as last resort
                 if (!notifyChannelValid) {
                     notifyChannel = writeChannel;
-                    Log.w(TAG, "⚠ WARNING: No Notify/Indicate channel found, using write channel: CH" + writeChannel.channelNum);
-                    Log.w(TAG, "  - This may cause AT+TRX_CHAN to fail if module requires Notify/Indicate channel");
+                    Log.e(TAG, "⚠ CRITICAL: No Notify/Indicate channel found - using TX channel for both!");
+                    Log.e(TAG, "  - Using: CH" + writeChannel.channelNum);
+                    Log.e(TAG, "  - This may fail on Android 15 if device requires separate RX channel");
                 }
             }
             
             // Determine write type (0=Without Response, 1=With Response)
             int writeType = writeChannel.properties.contains("Write Without Response") ? 0 : 1;
             writeType = 1;
-            
-            // Log final channel selection with validation
-            Log.d(TAG, "→ Final TRX Channel Configuration:");
-            Log.d(TAG, "  - Write Channel: CH" + writeChannel.channelNum + ", UUID:" + writeChannel.uuid + ", Properties:" + writeChannel.properties);
-            Log.d(TAG, "  - Notify Channel: CH" + notifyChannel.channelNum + ", UUID:" + notifyChannel.uuid + ", Properties:" + notifyChannel.properties);
+
+            // ====================================================================
+            // Step 4: Log final channel selection summary
+            // ====================================================================
+            Log.d(TAG, "═══════════════════════════════════════════════════════");
+            Log.d(TAG, "→ FINAL TRX CHANNEL CONFIGURATION");
+            Log.d(TAG, "═══════════════════════════════════════════════════════");
+            Log.d(TAG, "TX (Write) Channel:");
+            Log.d(TAG, "  - CH" + writeChannel.channelNum);
+            Log.d(TAG, "  - UUID: " + writeChannel.uuid);
+            Log.d(TAG, "  - Properties: " + writeChannel.properties);
             Log.d(TAG, "  - Write Type: " + writeType + " (" + (writeType == 0 ? "No ACK" : "With ACK") + ")");
-            Log.d(TAG, "  - Notify Channel Valid: " + notifyChannelValid);
+            Log.d(TAG, "");
+            Log.d(TAG, "RX (Notify) Channel:");
+            Log.d(TAG, "  - CH" + notifyChannel.channelNum);
+            Log.d(TAG, "  - UUID: " + notifyChannel.uuid);
+            Log.d(TAG, "  - Properties: " + notifyChannel.properties);
+            Log.d(TAG, "  - Valid: " + (notifyChannelValid ? "✓ YES" : "✗ NO (using fallback)"));
+            Log.d(TAG, "═══════════════════════════════════════════════════════");
             
             // Use the channel numbers for AT+TRX_CHAN command
             int writeCh = writeChannel.channelNum;
