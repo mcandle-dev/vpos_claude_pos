@@ -355,14 +355,14 @@ public class BleConnection {
             // ====================================================================
             // Step 2: Set Master Mode (AT+ROLE=1)
             // ====================================================================
-            if (!setMasterMode(500)) {
+            if (!setMasterMode(1000)) {
                 return new ConnectionResult(false, null, "Failed to set Master mode");
             }
 
             // ====================================================================
             // Step 3: Set Pairing Mode (AT+MASTER_PAIR=3)
             // ====================================================================
-            if (!setPairingMode(500)) {
+            if (!setPairingMode(3000)) {
                 return new ConnectionResult(false, null, "Failed to set pairing mode");
             }
 
@@ -370,8 +370,8 @@ public class BleConnection {
             // Step 4-1.5: Enable UUID Scan (AT+UUID_SCAN=1) - BEFORE CONNECT!
             // Must be enabled BEFORE AT+CONNECT to auto-print UUIDs when connecting
             // ====================================================================
-            if (!setUuidScanMode(500)) {
-                return new ConnectionResult(false, null, "Failed to set uuid scna mode");
+            if (!setUuidScanMode(2000)) {
+                return new ConnectionResult(false, null, "Failed to set uuid scan mode");
             }
 
             // ====================================================================
@@ -479,29 +479,29 @@ public class BleConnection {
             // ====================================================================
             // Step 4-3: Wait for connection to stabilize and verify it's still connected
             // ====================================================================
-//            Log.d(TAG, "\n[Step 4-3] Waiting for connection to stabilize...");
-//            Thread.sleep(1000); // Wait 1 second for connection to stabilize
-//
-//            // Verify connection is still active
-//            Log.d(TAG, "\n[Step 4-4] Verifying connection stability...");
-//            String verifyCmd = "AT+CNT_LIST\r\n";
-//            Log.i(TAG, "[AT CMD] >>> " + verifyCmd.trim());
-//            ret = At.Lib_ComSend(verifyCmd.getBytes(), verifyCmd.length());
-//
-//            if (ret == 0) {
-//                byte[] verifyResponse = new byte[256];
-//                int[] verifyLen = new int[1];
-//                ret = At.Lib_ComRecvAT(verifyResponse, verifyLen, 2000, 256);
-//                String verifyResponseStr = new String(verifyResponse, 0, verifyLen[0]);
-//                Log.i(TAG, "[AT RSP] <<< " + verifyResponseStr.replace("\r\n", "\\r\\n"));
-//
-//                // Check if our handle is still in the connected list
-//                if (!verifyResponseStr.contains(String.valueOf(handle))) {
-//                    Log.e(TAG, "✗ Connection verification failed - Handle " + handle + " not in connected list");
-//                    return new ConnectionResult(false, null,
-//                        "Connection lost during stabilization. Device may have disconnected.");
-//                }
-//            }
+            Log.d(TAG, "\n[Step 4-3] Waiting for connection to stabilize...");
+            Thread.sleep(1000); // Wait 1 second for connection to stabilize
+
+            // Verify connection is still active
+            Log.d(TAG, "\n[Step 4-4] Verifying connection stability...");
+            String verifyCmd = "AT+CNT_LIST\r\n";
+            Log.i(TAG, "[AT CMD] >>> " + verifyCmd.trim());
+            ret = At.Lib_ComSend(verifyCmd.getBytes(), verifyCmd.length());
+
+            if (ret == 0) {
+                byte[] verifyResponse = new byte[256];
+                int[] verifyLen = new int[1];
+                ret = At.Lib_ComRecvAT(verifyResponse, verifyLen, 2000, 256);
+                String verifyResponseStr = new String(verifyResponse, 0, verifyLen[0]);
+                Log.i(TAG, "[AT RSP] <<< " + verifyResponseStr.replace("\r\n", "\\r\\n"));
+
+                // Check if our handle is still in the connected list
+                if (!verifyResponseStr.contains(String.valueOf(handle))) {
+                    Log.e(TAG, "✗ Connection verification failed - Handle " + handle + " not in connected list");
+                    return new ConnectionResult(false, null,
+                        "Connection lost during stabilization. Device may have disconnected.");
+                }
+            }
 
             connectionHandle = handle;
             Log.d(TAG, "✓ Connection verified and stable with handle: " + handle);
