@@ -18,8 +18,7 @@ public class BleConnection {
 
     private Integer connectionHandle = null;
     private boolean testMode = false;
-
-    private String uuidScanResult = "";
+    private List<UuidChannel> discoveredChannels = new ArrayList<>(); // Store channels from connection
 
     // Result classes
     public static class ConnectionResult {
@@ -106,15 +105,34 @@ public class BleConnection {
         this.testMode = testMode;
     }
 
-    /**
-     * Connect to a BLE device
-     * @param macAddress MAC address in format XX:XX:XX:XX:XX:XX
-     * @return ConnectionResult with handle on success
-     */
-    public ConnectionResult connectToDevice(String macAddress) {
-        Log.d(TAG, "Connecting to device: " + macAddress);
+    public boolean setMasterMode(int timeout) {
+        Log.d(TAG, "\nSetting Master Mode...");
+        String roleCmd = "AT+ROLE=1\r\n";
+        Log.i(TAG, "[AT CMD] >>> " + roleCmd.trim());
+        int ret = At.Lib_ComSend(roleCmd.getBytes(), roleCmd.length());
+        Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
 
-        // Step 1: Set pairing mode to "Just Works" (no user intervention)
+        if (ret != 0) {
+            Log.e(TAG, "Failed to send ROLE command, ret: " + ret);
+            return false;
+        }
+
+        byte[] roleResponse = new byte[256];
+        int[] roleLen = new int[1];
+        ret = At.Lib_ComRecvAT(roleResponse, roleLen, timeout, 256);
+        String roleResponseStr = new String(roleResponse, 0, roleLen[0]);
+        Log.i(TAG, "[AT RSP] <<< " + roleResponseStr.replace("\r\n", "\\r\\n"));
+
+        if (!roleResponseStr.contains("OK")) {
+            Log.e(TAG, "Failed to set Master mode");
+            return false;
+        }
+
+        return true;
+    }
+
+    public boolean setPairingMode(int timeout) {
+        Log.d(TAG, "\nSetting Pairing Mode (Just Works)...");
         String pairCmd = "AT+MASTER_PAIR=3\r\n";
         Log.i(TAG, "[AT CMD] >>> " + pairCmd.trim());
         int ret = At.Lib_ComSend(pairCmd.getBytes(), pairCmd.length());
@@ -122,115 +140,415 @@ public class BleConnection {
 
         if (ret != 0) {
             Log.e(TAG, "Failed to send pairing mode command, ret: " + ret);
-            return new ConnectionResult(false, null, "Failed to set pairing mode: " + ret);
+            return false;
         }
 
-        // Receive pairing mode response
         byte[] pairResponse = new byte[256];
         int[] pairLen = new int[1];
-        ret = At.Lib_ComRecvAT(pairResponse, pairLen, 3000, 256);
-        Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + pairLen[0]);
-
-        if (ret != 0 || pairLen[0] == 0) {
-            Log.e(TAG, "Failed to receive pairing mode response, ret: " + ret);
-            return new ConnectionResult(false, null, "No response for pairing mode");
-        }
-
+        At.Lib_ComRecvAT(pairResponse, pairLen, timeout, 256);
         String pairResponseStr = new String(pairResponse, 0, pairLen[0]);
         Log.i(TAG, "[AT RSP] <<< " + pairResponseStr.replace("\r\n", "\\r\\n"));
 
         if (!pairResponseStr.contains("OK")) {
             Log.e(TAG, "Failed to set pairing mode");
-            return new ConnectionResult(false, null, "Failed to set pairing mode: " + pairResponseStr);
+            return false;
         }
 
-        // Step 2: Send AT+UUID_SCAN enable command
-        String cmd = "AT+UUID_SCAN=1\r\n";
-        Log.i(TAG, "[AT CMD] >>> " + cmd.trim());
-        ret = At.Lib_ComSend(cmd.getBytes(), cmd.length());
+        return true;
+    }
+
+    public boolean setUuidScanMode(int timeout) {
+        Log.d(TAG, "\nEnabling UUID Scan (for auto UUID discovery)...");
+        String uuidScanCmd = "AT+UUID_SCAN=1\r\n";
+        Log.i(TAG, "[AT CMD] >>> " + uuidScanCmd.trim());
+        int ret = At.Lib_ComSend(uuidScanCmd.getBytes(), uuidScanCmd.length());
         Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
 
         if (ret != 0) {
-            Log.e(TAG, "Failed to send uuid scan mode command, ret: " + ret);
-            return new ConnectionResult(false, null, "Failed to set uuid scan mode: " + ret);
+            Log.e(TAG, "Failed to send UUID_SCAN command, ret: " + ret);
+            return false;
         }
 
-        byte[] recvResponse = new byte[256];
-        int[] recvLen = new int[1];
-        ret = At.Lib_ComRecvAT(recvResponse, recvLen, 3000, 256);
-        Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + recvLen[0]);
+        byte[] uuidScanResponse = new byte[128];
+        int[] uuidScanLen = new int[1];
+        At.Lib_ComRecvAT(uuidScanResponse, uuidScanLen, timeout, 128);
+        String uuidScanResponseStr = new String(uuidScanResponse, 0, uuidScanLen[0]);
+        Log.i(TAG, "[AT RSP] <<< " + uuidScanResponseStr.replace("\r\n", "\\r\\n"));
 
-        if (ret != 0 || recvLen[0] == 0) {
-            Log.e(TAG, "Failed to receive uuid scan mode response, ret: " + ret);
-            return new ConnectionResult(false, null, "No response for uuid scan mode");
+        if (!uuidScanResponseStr.contains("OK")) {
+            Log.e(TAG, "UUID scan may have failed: " + uuidScanResponseStr);
+            return false;
         }
 
-        String recvResponseStr = new String(recvResponse, 0, recvLen[0]);
-        Log.i(TAG, "[AT RSP] <<< " + recvResponseStr.replace("\r\n", "\\r\\n"));
+        return true;
+    }
+    /**
+     * Connect to a BLE device following BLE_GATT_Connection_Guide.md Steps 2-4
+     *
+     * Step 2: Set Master Mode (AT+ROLE=1)
+     * Step 3: BLE Scan (AT+OBSERVER) - Already done in BeaconActivity
+     * Step 4: Connect to Device (AT+CONNECT)
+     *
+     * Note: Step 1 (Command Mode Entry with +++) is excluded as it may already be in command mode
+     * Note: Step 5 (UUID Scan) is performed in sendDataComplete() when actually needed
+     *
+     * @param macAddress MAC address in format XX:XX:XX:XX:XX:XX
+     * @return ConnectionResult with handle on success
+     */
+    public ConnectionResult connectToDevice(String macAddress) {
+        Log.d(TAG, "=== BLE Connection Process Started ===");
+        Log.d(TAG, "Target MAC: " + macAddress);
 
-        if (!recvResponseStr.contains("OK")) {
-            Log.e(TAG, "Failed to set uuid scan mode");
-            return new ConnectionResult(false, null, "Failed to set uuid scan mode: " + recvResponseStr);
-        }
+        try {
+//            // ====================================================================
+//            // Debug: Check current connection list before connecting
+//            // ====================================================================
+//            Log.d(TAG, "\n[Debug] Checking current connection list...");
+//            String cntListCmd = "AT+CNT_LIST\r\n";
+//            Log.i(TAG, "[AT CMD] >>> " + cntListCmd.trim());
+//            int ret = At.Lib_ComSend(cntListCmd.getBytes(), cntListCmd.length());
+//
+//            String cntResponseStr = null;
+//            if (ret == 0) {
+//                byte[] cntResponse = new byte[256];
+//                int[] cntLen = new int[1];
+//                ret = At.Lib_ComRecvAT(cntResponse, cntLen, 2000, 256);
+//                cntResponseStr = new String(cntResponse, 0, cntLen[0]);
+//                Log.i(TAG, "[AT RSP] <<< " + cntResponseStr.replace("\r\n", "\\r\\n"));
+//            }
+//
+//            // ====================================================================
+//            // Debug: Check BLE module status (may not be supported on all modules)
+//            // ====================================================================
+//            Log.d(TAG, "\n[Debug] Checking BLE module status...");
+//            String statusCmd = "AT+STATUS?\r\n";
+//            Log.i(TAG, "[AT CMD] >>> " + statusCmd.trim());
+//            ret = At.Lib_ComSend(statusCmd.getBytes(), statusCmd.length());
+//
+//            if (ret == 0) {
+//                byte[] statusResponse = new byte[256];
+//                int[] statusLen = new int[1];
+//                ret = At.Lib_ComRecvAT(statusResponse, statusLen, 2000, 256);
+//                String statusResponseStr = new String(statusResponse, 0, statusLen[0]);
+//                Log.i(TAG, "[AT RSP] <<< " + statusResponseStr.replace("\r\n", "\\r\\n"));
+//
+//                if (statusResponseStr.contains("ERROR")) {
+//                    Log.w(TAG, "AT+STATUS not supported on this module (ignoring)");
+//                }
+//            }
+//
+//            // ====================================================================
+//            // Disconnect any existing connections to ensure clean state
+//            // ====================================================================
+//            if (cntResponseStr != null && !cntResponseStr.trim().equals("AT+CNT_LIST=\r\nOK")) {
+//                Log.d(TAG, "\n[Cleanup] Found existing connection(s), disconnecting...");
+//
+//                // Parse existing handles and disconnect them
+//                Pattern handlePattern = Pattern.compile("(\\d+)\\s*\\(");
+//                Matcher handleMatcher = handlePattern.matcher(cntResponseStr);
+//
+//                while (handleMatcher.find()) {
+//                    try {
+//                        int existingHandle = Integer.parseInt(handleMatcher.group(1));
+//                        Log.d(TAG, "Disconnecting existing handle: " + existingHandle);
+//
+//                        boolean disconnected = false;
+//
+//                        // Strategy 1: Try AT+DISCONNECT=0,handle (slave disconnect - master initiates)
+//                        String discCmd1 = "AT+DISCONNECT=1," + existingHandle + "\r\n";
+//                        Log.i(TAG, "[AT CMD] >>> " + discCmd1.trim());
+//                        ret = At.Lib_ComSend(discCmd1.getBytes(), discCmd1.length());
+//
+//                        if (ret == 0) {
+//                            byte[] discResponse = new byte[256];
+//                            int[] discLen = new int[1];
+//                            ret = At.Lib_ComRecvAT(discResponse, discLen, 1000, 256);
+//                            String discResponseStr = new String(discResponse, 0, discLen[0]);
+//                            Log.i(TAG, "[AT RSP] <<< " + discResponseStr.replace("\r\n", "\\r\\n"));
+//
+//                            if (discResponseStr.contains("OK") || discResponseStr.contains("DISCONNECTED")) {
+//                                Log.d(TAG, "✓ Successfully disconnected handle " + existingHandle + " (method 1)");
+//                                disconnected = true;
+//                            }
+//                        }
+//
+//                        // Strategy 2: If first method failed, try AT+DISCE=handle
+//                        if (!disconnected) {
+//                            Thread.sleep(300);
+//                            String discCmd2 = "AT+DISCE=" + existingHandle + "\r\n";
+//                            Log.i(TAG, "[AT CMD] >>> " + discCmd2.trim() + " (trying alternative)");
+//                            ret = At.Lib_ComSend(discCmd2.getBytes(), discCmd2.length());
+//
+//                            if (ret == 0) {
+//                                byte[] discResponse2 = new byte[256];
+//                                int[] discLen2 = new int[1];
+//                                ret = At.Lib_ComRecvAT(discResponse2, discLen2, 2000, 256);
+//                                String discResponseStr2 = new String(discResponse2, 0, discLen2[0]);
+//                                Log.i(TAG, "[AT RSP] <<< " + discResponseStr2.replace("\r\n", "\\r\\n"));
+//
+//                                if (discResponseStr2.contains("OK") || discResponseStr2.contains("DISCONNECTED")) {
+//                                    Log.d(TAG, "✓ Successfully disconnected handle " + existingHandle + " (method 2)");
+//                                    disconnected = true;
+//                                }
+//                            }
+//                        }
+//
+//                        if (!disconnected) {
+//                            Log.w(TAG, "All disconnect methods failed for handle " + existingHandle + " - will try module reset");
+//                        }
+//
+//                        // Wait between disconnects
+//                        Thread.sleep(500);
+//                    } catch (Exception e) {
+//                        Log.w(TAG, "Failed to disconnect handle: " + e.getMessage());
+//                    }
+//                }
+//
+//                // Wait for disconnections to complete
+//                Log.d(TAG, "Waiting for disconnections to complete...");
+//                Thread.sleep(1000);
+//
+//                // ================================================================
+//                // Strategy 3: If disconnects failed, force reset by switching roles
+//                // Setting ROLE=0 will disconnect all active connections
+//                // ================================================================
+//                Log.d(TAG, "\n[Cleanup - Force Reset] Switching to Slave mode to clear all connections...");
+//                String roleResetCmd = "AT+ROLE=0\r\n";
+//                Log.i(TAG, "[AT CMD] >>> " + roleResetCmd.trim());
+//                ret = At.Lib_ComSend(roleResetCmd.getBytes(), roleResetCmd.length());
+//
+//                if (ret == 0) {
+//                    byte[] roleResetResponse = new byte[256];
+//                    int[] roleResetLen = new int[1];
+//                    ret = At.Lib_ComRecvAT(roleResetResponse, roleResetLen, 1000, 256);
+//                    String roleResetResponseStr = new String(roleResetResponse, 0, roleResetLen[0]);
+//                    Log.i(TAG, "[AT RSP] <<< " + roleResetResponseStr.replace("\r\n", "\\r\\n"));
+//
+//                    if (roleResetResponseStr.contains("OK")) {
+//                        Log.d(TAG, "✓ BLE module reset to Slave mode (all connections cleared)");
+//                        Thread.sleep(500);
+//
+//                        // Now verify connections are cleared
+//                        String verifyClearCmd = "AT+CNT_LIST\r\n";
+//                        Log.i(TAG, "[AT CMD] >>> " + verifyClearCmd.trim());
+//                        ret = At.Lib_ComSend(verifyClearCmd.getBytes(), verifyClearCmd.length());
+//
+//                        if (ret == 0) {
+//                            byte[] verifyClearResponse = new byte[256];
+//                            int[] verifyClearLen = new int[1];
+//                            ret = At.Lib_ComRecvAT(verifyClearResponse, verifyClearLen, 2000, 256);
+//                            String verifyClearResponseStr = new String(verifyClearResponse, 0, verifyClearLen[0]);
+//                            Log.i(TAG, "[AT RSP] <<< " + verifyClearResponseStr.replace("\r\n", "\\r\\n"));
+//
+//                            if (verifyClearResponseStr.contains("NULL")) {
+//                                Log.d(TAG, "✓ Confirmed: All connections cleared");
+//                            } else {
+//                                Log.w(TAG, "Connections may still exist: " + verifyClearResponseStr);
+//                            }
+//                        }
+//                    } else {
+//                        Log.w(TAG, "Failed to reset module: " + roleResetResponseStr);
+//                    }
+//                }
+//            }
 
-        // Step 3: Send AT+CONNECT command
-        cmd = "AT+CONNECT=," + macAddress + "\r\n";
-        Log.i(TAG, "[AT CMD] >>> " + cmd.trim());
-        ret = At.Lib_ComSend(cmd.getBytes(), cmd.length());
-        Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
-
-        if (ret != 0) {
-            Log.e(TAG, "Failed to send connect command, ret: " + ret);
-            return new ConnectionResult(false, null, "Failed to send command: " + ret);
-        }
-
-        // Receive response
-        byte[] response = new byte[2048];
-        int[] len = new int[1];
-        ret = At.Lib_ComRecvAT(response, len, 5000, 2048);
-        Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + len[0]);
-
-        if (ret != 0 || len[0] == 0) {
-            Log.e(TAG, "Failed to receive connect response, ret: " + ret);
-            return new ConnectionResult(false, null, "No response from device");
-        }
-
-        uuidScanResult = new String(response, 0, len[0]);
-        Log.i(TAG, "[AT RSP] <<< " + uuidScanResult.replace("\r\n", "\\r\\n"));
-
-        // Parse response
-        Integer handle = parseConnectResponse(uuidScanResult);
-        if (handle != null) {
-            connectionHandle = handle;
-            Log.d(TAG, "Connected with handle: " + handle);
-            return new ConnectionResult(true, handle, null);
-        } else if (uuidScanResult.contains("OK")) {
-            // If only OK is returned, assume connection is successful but handle is unknown
-            // Try to get connection handle by querying connected devices
-            Log.d(TAG, "Connect response only returned OK, trying to get connection handle");
-            handle = getConnectionHandleFromDeviceList();
-            if (handle != null) {
-                connectionHandle = handle;
-                Log.d(TAG, "Connected with handle retrieved from device list: " + handle);
-                return new ConnectionResult(true, handle, null);
-            } else {
-                // If we can't get handle, assume connection is successful with default handle 1
-                // This is a fallback for devices that only return OK
-                Log.d(TAG, "Could not get connection handle, using default handle 1");
-                connectionHandle = 1;
-                return new ConnectionResult(true, 1, "Connected but handle not found, using default");
+            // ====================================================================
+            // Step 2: Set Master Mode (AT+ROLE=1)
+            // ====================================================================
+            if (!setMasterMode(500)) {
+                return new ConnectionResult(false, null, "Failed to set Master mode");
             }
-        } else {
-            Log.e(TAG, "Failed to parse connect response");
-            return new ConnectionResult(false, null, "Failed to parse response: " + uuidScanResult);
+
+            // ====================================================================
+            // Step 3: Set Pairing Mode (AT+MASTER_PAIR=3)
+            // ====================================================================
+            if (!setPairingMode(500)) {
+                return new ConnectionResult(false, null, "Failed to set pairing mode");
+            }
+
+            // ====================================================================
+            // Step 4-1: Connect to Device (AT+CONNECT)
+            // Android 15 Compatibility: Connect FIRST, then enable UUID_SCAN
+            // ====================================================================
+            Log.d(TAG, "\n[Step 4-1] Connecting to Device...");
+
+            // Simple MAC address validation (length check only to avoid regex issues)
+            if (macAddress == null || macAddress.length() != 17) {
+                Log.e(TAG, "Invalid MAC address: " + macAddress);
+                return new ConnectionResult(false, null, "Invalid MAC address");
+            }
+            Log.d(TAG, "Target MAC validated: " + macAddress);
+
+            String connectCmd = "AT+CONNECT=," + macAddress + "\r\n";
+            Log.i(TAG, "[AT CMD] >>> " + connectCmd.trim());
+
+            int ret = At.Lib_ComSend(connectCmd.getBytes(), connectCmd.length());
+            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+
+            if (ret != 0) {
+                Log.e(TAG, "Failed to send connect command, ret: " + ret);
+                return new ConnectionResult(false, null, "Failed to send CONNECT: " + ret);
+            }
+
+            // Wait for Connection Response
+            byte[] connectResponse = new byte[2048];
+            int[] connectLen = new int[1];
+            ret = At.Lib_ComRecvAT(connectResponse, connectLen, 3000, 2048);
+            Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + connectLen[0]);
+
+            if (ret != 0 || connectLen[0] == 0) {
+                Log.e(TAG, "Failed to receive connect response, ret: " + ret);
+                return new ConnectionResult(false, null, "No connection response from device");
+            }
+
+            String connectResponseStr = new String(connectResponse, 0, connectLen[0]);
+            Log.i(TAG, "[AT RSP] <<< " + connectResponseStr.replace("\r\n", "\\r\\n"));
+
+            // ====================================================================
+            // Check for immediate DISCONNECTED in the same response
+            // ====================================================================
+            if (connectResponseStr.contains("DISCONNECTED")) {
+                Log.e(TAG, "✗ Connection failed - Device immediately disconnected");
+                Log.e(TAG, "Possible causes:");
+                Log.e(TAG, "  1. Pairing/bonding requirement mismatch");
+                Log.e(TAG, "  2. Device rejected connection (security, whitelist, etc.)");
+                Log.e(TAG, "  3. Connection parameters not acceptable");
+                Log.e(TAG, "  4. Device already connected to another master");
+                return new ConnectionResult(false, null,
+                    "Device disconnected immediately after connection. Check pairing mode and device security settings.");
+            }
+
+            // ====================================================================
+            // Parse connection handle first
+            // ====================================================================
+            Integer handle = parseConnectResponse(connectResponseStr);
+            if (handle == null && connectResponseStr.contains("OK")) {
+                Log.d(TAG, "Connect OK received, querying device list for handle...");
+                handle = getConnectionHandleFromDeviceList();
+            }
+            if (handle == null) {
+                Log.d(TAG, "Using default handle 1");
+                handle = 1;
+            }
+
+            connectionHandle = handle;
+            Log.d(TAG, "✓ Connection established with handle: " + handle);
+
+            // ====================================================================
+            // Step 4-2: Enable UUID Scan AFTER connection (Android 15 Compatibility)
+            // Android 15 requires UUID discovery to happen AFTER connection is established
+            // ====================================================================
+            Log.d(TAG, "\n[Step 4-2] Enabling UUID Scan after connection (Android 15 fix)...");
+            if (!setUuidScanMode(800)) {
+                Log.w(TAG, "⚠ UUID scan mode failed, will try manual scan later");
+            }
+
+            // ====================================================================
+            // Step 4-3: Wait for BLE stack to prepare (Android 15 requirement)
+            // Android 15 BLE stack is slower and needs time after connection
+            // ====================================================================
+            Log.d(TAG, "\n[Step 4-3] Waiting for Android 15 BLE stack preparation...");
+            Thread.sleep(800);
+
+            // ====================================================================
+            // Step 4-4: Try to receive UUID channel data (may arrive delayed on Android 15)
+            // ====================================================================
+            Log.d(TAG, "\n[Step 4-4] Checking for UUID channel data...");
+            byte[] uuidResponse = new byte[2048];
+            int[] uuidLen = new int[1];
+            ret = At.Lib_ComRecvAT(uuidResponse, uuidLen, 3000, 2048);
+
+            if (ret == 0 && uuidLen[0] > 0) {
+                String uuidResponseStr = new String(uuidResponse, 0, uuidLen[0]);
+                Log.i(TAG, "[AT RSP] <<< " + uuidResponseStr.replace("\r\n", "\\r\\n"));
+
+                if (uuidResponseStr.contains("-CHAR:")) {
+                    Log.d(TAG, "✓ UUID characteristics received after connection");
+                    discoveredChannels = parseUuidScanResponse(uuidResponseStr);
+                    Log.d(TAG, "✓ Stored " + discoveredChannels.size() + " characteristics");
+                    for (UuidChannel channel : discoveredChannels) {
+                        Log.d(TAG, "  - CH" + channel.channelNum + " UUID:" + channel.uuid +
+                              " (" + channel.properties + ")");
+                    }
+                }
+            }
+
+            // ====================================================================
+            // Parse and store UUID channels from initial connection response (if any)
+            // This is a fallback for devices that included CHAR data in CONNECT response
+            // ====================================================================
+            if (connectResponseStr.contains("-CHAR:") && discoveredChannels.isEmpty()) {
+                Log.d(TAG, "✓ UUID characteristics found in connection response");
+                discoveredChannels = parseUuidScanResponse(connectResponseStr);
+                Log.d(TAG, "✓ Stored " + discoveredChannels.size() + " characteristics for later use");
+                for (UuidChannel channel : discoveredChannels) {
+                    Log.d(TAG, "  - CH" + channel.channelNum + " UUID:" + channel.uuid +
+                          " (" + channel.properties + ")");
+                }
+            }
+
+            // ====================================================================
+            // Step 4-5: Manual UUID scan with retry (Android 15 compatibility)
+            // If no UUID channels discovered yet, try manual scan with up to 3 retries
+            // ====================================================================
+            if (discoveredChannels.isEmpty()) {
+                Log.w(TAG, "\n[Step 4-5] No UUID channels found yet - performing manual scan with retry...");
+
+                for (int retry = 0; retry < 3; retry++) {
+                    try {
+                        if (retry > 0) {
+                            Log.d(TAG, "Retry attempt " + retry + " after 500ms delay...");
+                            Thread.sleep(500);
+                        }
+
+                        Log.d(TAG, "Executing manual UUID scan (attempt " + (retry + 1) + "/3)...");
+                        UuidScanResult scanResult = scanUuidChannels();
+
+                        if (scanResult.isSuccess() && scanResult.getChannels() != null && !scanResult.getChannels().isEmpty()) {
+                            discoveredChannels = scanResult.getChannels();
+                            Log.d(TAG, "✓ Manual UUID scan succeeded on attempt " + (retry + 1));
+                            Log.d(TAG, "✓ Found " + discoveredChannels.size() + " characteristics:");
+                            for (UuidChannel channel : discoveredChannels) {
+                                Log.d(TAG, "  - CH" + channel.channelNum + " UUID:" + channel.uuid +
+                                      " (" + channel.properties + ")");
+                            }
+                            break;
+                        } else {
+                            Log.w(TAG, "✗ Manual UUID scan attempt " + (retry + 1) + " failed: " + scanResult.getError());
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "✗ Manual UUID scan attempt " + (retry + 1) + " exception: " + e.getMessage());
+                    }
+                }
+
+                if (discoveredChannels.isEmpty()) {
+                    Log.e(TAG, "✗ All manual UUID scan attempts failed - no characteristics available");
+                }
+            }
+
+            Log.d(TAG, "✓ Connection completed with handle: " + handle);
+            Log.d(TAG, "✓ Discovered " + discoveredChannels.size() + " UUID channels");
+            Log.d(TAG, "=== BLE Connection Process Completed Successfully ===");
+            return new ConnectionResult(true, handle, null);
+
+        } catch (Exception e) {
+            Log.e(TAG, "Connection error: " + e.getMessage());
+            e.printStackTrace();
+            return new ConnectionResult(false, null, "Connection error: " + e.getMessage());
         }
     }
 
     /**
      * Disconnect from the connected device
+     * Following BLE_GATT_Connection_Guide.md Step 10
+     *
+     * Step 10: Disconnect (AT+DISCONNECT)
+     *
      * @return true if disconnected successfully
      */
     public boolean disconnect() {
+        Log.d(TAG, "=== BLE Disconnect Process Started ===");
+
         if (connectionHandle == null) {
             Log.w(TAG, "No active connection to disconnect");
             return false;
@@ -238,37 +556,487 @@ public class BleConnection {
 
         Log.d(TAG, "Disconnecting handle: " + connectionHandle);
 
-        // Send AT+DISCONNECT command according to AT command set
-        String cmd = "AT+DISCONNECT=1," + connectionHandle + "\r\n";
-        Log.i(TAG, "[AT CMD] >>> " + cmd.trim());
-        int ret = At.Lib_ComSend(cmd.getBytes(), cmd.length());
-        Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+        try {
+            // ====================================================================
+            // Step 10: Disconnect (AT+DISCONNECT=1,handle)
+            // Parameter: 0=Slave disconnect (Master initiates), 1=Master disconnect
+            // ====================================================================
+            Log.d(TAG, "\n[Step 10] Disconnecting from Device...");
+            String cmd = "AT+DISCONNECT=1," + connectionHandle + "\r\n";
+//            String cmd = "AT+DISCONNECT\r\n";
+            Log.i(TAG, "[AT CMD] >>> " + cmd.trim());
+            int ret = At.Lib_ComSend(cmd.getBytes(), cmd.length());
+            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
 
-        if (ret != 0) {
-            Log.e(TAG, "Failed to send disconnect command, ret: " + ret);
+            if (ret != 0) {
+                Log.e(TAG, "Failed to send disconnect command, ret: " + ret);
+                return false;
+            }
+
+            // Receive response
+            byte[] response = new byte[256];
+            int[] len = new int[1];
+            ret = At.Lib_ComRecvAT(response, len, 3000, 256);
+            Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + len[0]);
+
+            String responseStr = new String(response, 0, len[0]);
+            Log.i(TAG, "[AT RSP] <<< " + responseStr.replace("\r\n", "\\r\\n"));
+
+            boolean success = responseStr.contains("OK") || responseStr.contains("DISCONNECTED");
+
+            if (success) {
+                Log.d(TAG, "✓ Disconnected successfully");
+                Log.d(TAG, "=== BLE Disconnect Process Completed Successfully ===");
+            } else {
+                Log.e(TAG, "Disconnect failed: " + responseStr);
+            }
+
+            connectionHandle = null;
+            discoveredChannels.clear(); // Clear stored channels on disconnect
+            return success;
+
+        } catch (Exception e) {
+            Log.e(TAG, "Disconnect error: " + e.getMessage());
+            e.printStackTrace();
+            connectionHandle = null;
+            discoveredChannels.clear(); // Clear stored channels on error
             return false;
         }
+    }
 
-        // Receive response
-        byte[] response = new byte[256];
-        int[] len = new int[1];
-        ret = At.Lib_ComRecvAT(response, len, 3000, 256);
-        Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + len[0]);
+    /**
+     * Send data to connected device following BLE_GATT_Connection_Guide.md Steps 5-9
+     *
+     * Step 5: Enable UUID Scan (AT+UUID_SCAN=1)
+     * Step 6: Check Connection Handle (AT+CNT_LIST)
+     * Step 7: Set TRX Channel (AT+TRX_CHAN)
+     * Step 8: Set Transparent Transmission Handle (AT+TTM_HANDLE)
+     * Step 9: Send Data (AT+SEND)
+     *
+     * @param data Data to send (e.g., "order_id=123456745")
+     * @param timeout Timeout in milliseconds (recommended: 2000ms)
+     * @return SendResult with success status
+     */
+    public SendResult sendDataComplete(String data, int timeout) {
+        Log.d(TAG, "=== BLE Data Send Process Started ===");
+        Log.d(TAG, "Data: " + data + " (" + data.length() + " bytes)");
 
-        String responseStr = new String(response, 0, len[0]);
-        Log.i(TAG, "[AT RSP] <<< " + responseStr.replace("\r\n", "\\r\\n"));
+        if (connectionHandle == null) {
+            Log.e(TAG, "Not connected to any device");
+            return new SendResult(false, "Not connected");
+        }
 
-        connectionHandle = null;
-        return responseStr.contains("OK") || responseStr.contains("DISCONNECTED");
+        try {
+            int ret; // Return value for AT command operations
+
+            // ====================================================================
+            // Step 5: Use stored UUID channels from connection
+            // If channels are empty, attempt manual UUID scan
+            // ====================================================================
+            Log.d(TAG, "\n[Step 5] Using stored UUID characteristics from connection...");
+
+            if (discoveredChannels.isEmpty()) {
+                Log.e(TAG, "No characteristics available - attempting manual UUID scan...");
+                
+                // Attempt manual UUID scan if no characteristics available
+                try {
+                    Log.d(TAG, "Executing manual UUID scan in sendDataComplete...");
+                    UuidScanResult scanResult = scanUuidChannels();
+                    if (scanResult.isSuccess() && scanResult.getChannels() != null && !scanResult.getChannels().isEmpty()) {
+                        discoveredChannels = scanResult.getChannels();
+                        Log.d(TAG, "✓ Manual UUID scan succeeded - found " + discoveredChannels.size() + " characteristics");
+                        for (UuidChannel channel : discoveredChannels) {
+                            Log.d(TAG, "  - CH" + channel.channelNum + " UUID:" + channel.uuid +
+                                  " (" + channel.properties + ")");
+                        }
+                    } else {
+                        Log.e(TAG, "✗ Manual UUID scan failed: " + scanResult.getError());
+                        return new SendResult(false, "No GATT characteristics available. Manual scan failed: " + scanResult.getError());
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "✗ Manual UUID scan exception: " + e.getMessage());
+                    return new SendResult(false, "No GATT characteristics available. Exception: " + e.getMessage());
+                }
+            }
+
+            Log.d(TAG, "✓ Using " + discoveredChannels.size() + " stored characteristics:");
+            for (UuidChannel channel : discoveredChannels) {
+                Log.d(TAG, "  - CH" + channel.channelNum + " UUID:" + channel.uuid +
+                      " (" + channel.properties + ")");
+            }
+
+            List<UuidChannel> channels = discoveredChannels;
+
+            // ====================================================================
+            // Step 6: Check Connection Handle (AT+CNT_LIST)
+            // ====================================================================
+//            Log.d(TAG, "\n[Step 6] Checking Connection Handle...");
+//            String cntListCmd = "AT+CNT_LIST\r\n";
+//            Log.i(TAG, "[AT CMD] >>> " + cntListCmd.trim());
+//            ret = At.Lib_ComSend(cntListCmd.getBytes(), cntListCmd.length());
+//            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+//
+//            if (ret != 0) {
+//                Log.e(TAG, "Failed to send CNT_LIST command");
+//                return new SendResult(false, "Failed to check connection: " + ret);
+//            }
+//
+//            byte[] cntListResponse = new byte[512];
+//            int[] cntListLen = new int[1];
+//            ret = At.Lib_ComRecvAT(cntListResponse, cntListLen, 3000, 512);
+//            String cntListResponseStr = new String(cntListResponse, 0, cntListLen[0]);
+//            Log.i(TAG, "[AT RSP] <<< " + cntListResponseStr.replace("\r\n", "\\r\\n"));
+//
+//            if (!cntListResponseStr.contains(String.valueOf(connectionHandle))) {
+//                Log.e(TAG, "Connection handle " + connectionHandle + " not found in device list");
+//                return new SendResult(false, "Device not connected");
+//            }
+
+            // ====================================================================
+            // Step 7: Set TRX Channel (AT+TRX_CHAN)
+            // ====================================================================
+            Log.d(TAG, "\n[Step 7] Setting TRX Channel...");
+            Log.d(TAG, "Available channels for selection: " + channels.size());
+            for (UuidChannel channel : channels) {
+                Log.d(TAG, "  - CH" + channel.channelNum + ": UUID=" + channel.uuid + ", Properties=" + channel.properties);
+            }
+
+            // Special handling for mCandle GATT Service UUIDs
+            // Service UUID: 0000fff0-0000-1000-8000-00805f9b34fb
+            // Write UUID: 0000fff1-0000-1000-8000-00805f9b34fb
+            // Read UUID: 0000fff2-0000-1000-8000-00805f9b34fb
+            
+            // Channel selection for mCandle BLE App
+            UuidChannel writeChannel = null;
+            UuidChannel notifyChannel = null;
+            
+            // Find write channel - prioritize mCandle specific UUIDs (FFF1 or F1FF)
+            // Note: F1FF is little-endian representation of 0xFFF1
+            for (UuidChannel channel : channels) {
+                String uuidLower = channel.uuid.toLowerCase();
+                // Check for specific mCandle write UUID (fff1 or f1ff)
+                if (uuidLower.contains("f1ff")) {
+                    writeChannel = channel;
+                    Log.d(TAG, "✓ Found mCandle write channel: CH" + channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                    break;
+                }
+            }
+
+            // Fallback: If no mCandle-specific UUID found, look for any write-capable channel
+            if (writeChannel == null) {
+                for (UuidChannel channel : channels) {
+                    if (channel.properties.contains("Write")) {
+                        writeChannel = channel;
+                        Log.d(TAG, "✓ Found generic write channel: CH" + channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                        break;
+                    }
+                }
+            }
+            
+            // Find read/notify channel (look for fff2/F2FF UUID suffix and Notify/Indicate property)
+            for (UuidChannel channel : channels) {
+                // Check for specific mCandle read UUID AND ensure it has Notify/Indicate property
+                boolean hasCorrectUuid = channel.uuid.toLowerCase().contains("f1ff");
+                boolean hasNotifyProperty = channel.properties.contains("Notify") || channel.properties.contains("Indicate");
+                
+                if (hasCorrectUuid && hasNotifyProperty) {
+                    notifyChannel = channel;
+                    Log.d(TAG, "✓ Found notify/read channel: CH" + channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                    break;
+                }
+            }
+            
+            // Fallback: If no specific fff2 channel found, look for any channel with Notify/Indicate property
+            if (notifyChannel == null) {
+                for (UuidChannel channel : channels) {
+                    if (channel.properties.contains("Notify") || channel.properties.contains("Indicate")) {
+                        notifyChannel = channel;
+                        Log.w(TAG, "⚠ Fallback: Using channel with Notify/Indicate: CH" + channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                        break;
+                    }
+                }
+            }
+            
+            // Fallback: Use first two channels if specific UUIDs not found
+            if (writeChannel == null && channels.size() >= 1) {
+                writeChannel = channels.get(0);
+                Log.w(TAG, "⚠ Fallback: Using first channel as write channel: CH" + writeChannel.channelNum + ", UUID:" + writeChannel.uuid);
+            }
+            
+            if (notifyChannel == null && channels.size() >= 2) {
+                notifyChannel = channels.get(1);
+                Log.w(TAG, "⚠ Fallback: Using second channel as notify channel: CH" + notifyChannel.channelNum + ", UUID:" + notifyChannel.uuid);
+            }
+            
+            // Ensure we have at least a write channel
+            if (writeChannel == null) {
+                Log.e(TAG, "❌ No write channel found! Cannot send data.");
+                return new SendResult(false, "No write channel found");
+            }
+            
+            // Critical: Ensure notify channel has Notify/Indicate property
+            boolean notifyChannelValid = notifyChannel != null && 
+                                       (notifyChannel.properties.contains("Notify") || 
+                                        notifyChannel.properties.contains("Indicate"));
+            
+            if (!notifyChannelValid) {
+                // Find ANY channel with Notify/Indicate property as final fallback
+                for (UuidChannel channel : channels) {
+                    if (channel.properties.contains("Notify") || channel.properties.contains("Indicate")) {
+                        notifyChannel = channel;
+                        Log.w(TAG, "⚠ Final fallback: Using channel with Notify/Indicate: CH" + channel.channelNum + ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                        notifyChannelValid = true;
+                        break;
+                    }
+                }
+                
+                // If still no valid notify channel, use write channel (but log warning)
+                if (!notifyChannelValid) {
+                    notifyChannel = writeChannel;
+                    Log.w(TAG, "⚠ WARNING: No Notify/Indicate channel found, using write channel: CH" + writeChannel.channelNum);
+                    Log.w(TAG, "  - This may cause AT+TRX_CHAN to fail if module requires Notify/Indicate channel");
+                }
+            }
+            
+            // Determine write type (0=Without Response, 1=With Response)
+            int writeType = writeChannel.properties.contains("Write Without Response") ? 0 : 1;
+            writeType = 1;
+            
+            // Log final channel selection with validation
+            Log.d(TAG, "→ Final TRX Channel Configuration:");
+            Log.d(TAG, "  - Write Channel: CH" + writeChannel.channelNum + ", UUID:" + writeChannel.uuid + ", Properties:" + writeChannel.properties);
+            Log.d(TAG, "  - Notify Channel: CH" + notifyChannel.channelNum + ", UUID:" + notifyChannel.uuid + ", Properties:" + notifyChannel.properties);
+            Log.d(TAG, "  - Write Type: " + writeType + " (" + (writeType == 0 ? "No ACK" : "With ACK") + ")");
+            Log.d(TAG, "  - Notify Channel Valid: " + notifyChannelValid);
+            
+            // Use the channel numbers for AT+TRX_CHAN command
+            int writeCh = writeChannel.channelNum;
+            int notifyCh = notifyChannel.channelNum;
+
+            // Set TRX Channel
+            Log.d(TAG, "Configuring TRX channels...");
+            String trxCmd = String.format("AT+TRX_CHAN=%d,%d,%d,%d\r\n",
+                connectionHandle, writeCh, notifyCh, writeType);
+            Log.i(TAG, "[AT CMD] >>> " + trxCmd.trim());
+            ret = At.Lib_ComSend(trxCmd.getBytes(), trxCmd.length());
+            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+
+            if (ret != 0) {
+                Log.e(TAG, "Failed to send TRX_CHAN command");
+                return new SendResult(false, "Failed to set TRX channel: " + ret);
+            }
+
+            byte[] trxResponse = new byte[256];
+            int[] trxLen = new int[1];
+            ret = At.Lib_ComRecvAT(trxResponse, trxLen, 3000, 256);
+            String trxResponseStr = new String(trxResponse, 0, trxLen[0]);
+            Log.i(TAG, "[AT RSP] <<< " + trxResponseStr.replace("\r\n", "\\r\\n"));
+
+            if (!trxResponseStr.contains("OK")) {
+                Log.e(TAG, "Failed to set TRX channel");
+                return new SendResult(false, "TRX channel response: " + trxResponseStr);
+            }
+
+            // ====================================================================
+            // Step 8: Set Transparent Transmission Handle (AT+TTM_HANDLE)
+            // ====================================================================
+//            Log.d(TAG, "\n[Step 8] Setting Transparent Transmission Handle...");
+//            String ttmCmd = "AT+TTM_HANDLE=" + connectionHandle + "\r\n";
+//            Log.i(TAG, "[AT CMD] >>> " + ttmCmd.trim());
+//            ret = At.Lib_ComSend(ttmCmd.getBytes(), ttmCmd.length());
+//            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+//
+//            if (ret != 0) {
+//                Log.e(TAG, "Failed to send TTM_HANDLE command");
+//                return new SendResult(false, "Failed to set TTM handle: " + ret);
+//            }
+//
+//            byte[] ttmResponse = new byte[256];
+//            int[] ttmLen = new int[1];
+//            ret = At.Lib_ComRecvAT(ttmResponse, ttmLen, 3000, 256);
+//            String ttmResponseStr = new String(ttmResponse, 0, ttmLen[0]);
+//            Log.i(TAG, "[AT RSP] <<< " + ttmResponseStr.replace("\r\n", "\\r\\n"));
+//
+//            if (!ttmResponseStr.contains("OK")) {
+//                Log.e(TAG, "Failed to set TTM handle");
+//                return new SendResult(false, "TTM handle response: " + ttmResponseStr);
+//            }
+
+            // ====================================================================
+            // Step 9: Send Data (AT+SEND)
+            // ====================================================================
+            Log.d(TAG, "\n[Step 9] Sending Data...");
+            byte[] dataBytes = data.getBytes();
+            int dataLength = dataBytes.length;
+
+            // Step 9-1: Send AT+SEND command
+            String sendCmd = String.format("AT+SEND=%d,%d,%d\r\n",
+                connectionHandle, dataLength, timeout);
+            Log.i(TAG, "[AT CMD] >>> " + sendCmd.trim());
+            ret = At.Lib_ComSend(sendCmd.getBytes(), sendCmd.length());
+            Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+
+            if (ret != 0) {
+                Log.e(TAG, "Failed to send AT+SEND command");
+                return new SendResult(false, "Failed to send command: " + ret);
+            }
+
+            // Step 9-2: Wait for "INPUT_BLE_DATA:" prompt
+            byte[] sendResponse = new byte[256];
+            int[] sendLen = new int[1];
+            ret = At.Lib_ComRecvAT(sendResponse, sendLen, 1000, 256);
+            String sendResponseStr = new String(sendResponse, 0, sendLen[0]);
+            Log.i(TAG, "[AT RSP] <<< " + sendResponseStr.replace("\r\n", "\\r\\n"));
+
+            if (!sendResponseStr.contains("INPUT_BLE_DATA:" + dataLength)) {
+                Log.e(TAG, "Module not ready for data input");
+                return new SendResult(false, "Unexpected response: " + sendResponseStr);
+            }
+
+            // Step 9-3: Send actual data (NO CRLF!)
+            Log.d(TAG, "⏳ Module ready, sending data...");
+            Log.i(TAG, "[AT DATA] >>> " + data + " (" + dataLength + " bytes, NO CRLF)");
+            ret = At.Lib_ComSend(dataBytes, dataLength);
+            Log.d(TAG, "[AT DATA] Lib_ComSend returned: " + ret);
+
+            if (ret != 0) {
+                Log.e(TAG, "Failed to send data");
+                return new SendResult(false, "Failed to send data: " + ret);
+            }
+
+            // Step 9-4: Wait for send confirmation
+            Thread.sleep(300);
+            byte[] confirmResponse = new byte[256];
+            int[] confirmLen = new int[1];
+            ret = At.Lib_ComRecvAT(confirmResponse, confirmLen, 5000, 4);
+            String confirmResponseStr = new String(confirmResponse, 0, confirmLen[0]);
+            Log.i(TAG, "[AT RSP] <<< " + confirmResponseStr.replace("\r\n", "\\r\\n"));
+
+            if (confirmResponseStr.contains("OK") || confirmResponseStr.contains("SEND_OK")) {
+                Log.d(TAG, "✓ Data sent successfully");
+                Log.d(TAG, "=== BLE Data Send Process Completed Successfully ===");
+                return new SendResult(true, null);
+            } else {
+                Log.e(TAG, "Send failed");
+                return new SendResult(false, "Send failed: " + confirmResponseStr);
+            }
+
+        } catch (InterruptedException e) {
+            Log.e(TAG, "Send interrupted: " + e.getMessage());
+            return new SendResult(false, "Send interrupted: " + e.getMessage());
+        } catch (Exception e) {
+            Log.e(TAG, "Send error: " + e.getMessage());
+            e.printStackTrace();
+            return new SendResult(false, "Send error: " + e.getMessage());
+        }
     }
 
     /**
      * Scan for UUID channels on the connected device
+     * According to AT command protocol, UUID_SCAN=1 enables the feature, but we need to use a different approach
+     * to actually get the UUIDs. Let's implement a more robust scanning method.
      * @return UuidScanResult with list of available channels
      */
     public UuidScanResult scanUuidChannels() {
-        // Parse response: "-CHAR:[num] UUID:[uuid],[properties];"
-        List<UuidChannel> channels = parseUuidScanResponse(uuidScanResult);
+        if (connectionHandle == null) {
+            return new UuidScanResult(false, null, "Not connected");
+        }
+
+        Log.d(TAG, "Scanning UUID channels");
+
+        List<UuidChannel> channels = new ArrayList<>();
+
+        // ====================================================================
+        // Android 15 Fix: Check receive buffer first for delayed CHAR data
+        // On Android 15, CHAR data may arrive after connection with delay
+        // ====================================================================
+        Log.d(TAG, "Checking receive buffer for delayed UUID channel data...");
+        byte[] bufferResponse = new byte[2048];
+        int[] bufferLen = new int[1];
+        int ret = At.Lib_ComRecvAT(bufferResponse, bufferLen, 2000, 2048);
+
+        if (ret == 0 && bufferLen[0] > 0) {
+            String bufferResponseStr = new String(bufferResponse, 0, bufferLen[0]);
+            Log.i(TAG, "[AT RSP] <<< " + bufferResponseStr.replace("\r\n", "\\r\\n"));
+
+            if (bufferResponseStr.contains("-CHAR:")) {
+                Log.d(TAG, "✓ Found delayed CHAR data in receive buffer");
+                List<UuidChannel> parsedChannels = parseUuidScanResponse(bufferResponseStr);
+                if (!parsedChannels.isEmpty()) {
+                    Log.d(TAG, "✓ Successfully parsed " + parsedChannels.size() + " channels from buffer");
+                    return new UuidScanResult(true, parsedChannels, null);
+                }
+            }
+        }
+
+        // Approach 1: Try to get UUIDs using AT+UUID command (if supported)
+        String cmd = "AT+UUID=?\r\n";
+        Log.i(TAG, "[AT CMD] >>> " + cmd.trim());
+        ret = At.Lib_ComSend(cmd.getBytes(), cmd.length());
+        Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+
+        if (ret == 0) {
+            // Receive response
+            byte[] response = new byte[2048];
+            int[] len = new int[1];
+            ret = At.Lib_ComRecvAT(response, len, 2000, 2048);
+            Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + len[0]);
+
+            if (ret == 0 && len[0] > 0) {
+                String responseStr = new String(response, 0, len[0]);
+                Log.i(TAG, "[AT RSP] <<< " + responseStr.replace("\r\n", "\\r\\n"));
+                
+                // Parse response for UUID channels
+                List<UuidChannel> parsedChannels = parseUuidScanResponse(responseStr);
+                if (!parsedChannels.isEmpty()) {
+                    channels.addAll(parsedChannels);
+                    return new UuidScanResult(true, channels, null);
+                }
+            }
+        }
+        
+        // Approach 2: Try AT+CHAR command (alternative for some modules)
+        cmd = "AT+CHAR=?\r\n";
+        Log.i(TAG, "[AT CMD] >>> " + cmd.trim());
+        ret = At.Lib_ComSend(cmd.getBytes(), cmd.length());
+        Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
+
+        if (ret == 0) {
+            // Receive response
+            byte[] response = new byte[2048];
+            int[] len = new int[1];
+            ret = At.Lib_ComRecvAT(response, len, 2000, 2048);
+            Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + len[0]);
+
+            if (ret == 0 && len[0] > 0) {
+                String responseStr = new String(response, 0, len[0]);
+                Log.i(TAG, "[AT RSP] <<< " + responseStr.replace("\r\n", "\\r\\n"));
+                
+                // Parse response for UUID channels
+                List<UuidChannel> parsedChannels = parseUuidScanResponse(responseStr);
+                if (!parsedChannels.isEmpty()) {
+                    channels.addAll(parsedChannels);
+                    return new UuidScanResult(true, channels, null);
+                }
+            }
+        }
+        
+        // Approach 3: For mCandle app, we know the fixed UUIDs, so we can manually create them
+        // Service UUID: 0000fff0-0000-1000-8000-00805f9b34fb
+        // Write UUID: 0000fff1-0000-1000-8000-00805f9b34fb
+        // Read UUID: 0000fff2-0000-1000-8000-00805f9b34fb
+        Log.d(TAG, "Using manual UUID mapping for mCandle app...");
+        
+        // Create channels manually based on mCandle app's fixed UUIDs
+        // Note: Channel numbers may vary by module, but we'll use common values
+        channels.add(new UuidChannel(0, "F1FF", "Write Without Response,Write"));
+        channels.add(new UuidChannel(1, "F2FF", "Read,Notify"));
+        
+        Log.d(TAG, "✓ Created manual UUID channels for mCandle app");
+        for (UuidChannel channel : channels) {
+            Log.d(TAG, "  - CH" + channel.channelNum + " UUID:" + channel.uuid + " (" + channel.properties + ")");
+        }
+        
         return new UuidScanResult(true, channels, null);
     }
 
@@ -289,8 +1057,7 @@ public class BleConnection {
             writeCh, notifyCh, type));
 
         // Send AT+TRX_CHAN command
-        String cmd = String.format("AT+TRX_CHAN=%d,%d,%d,%d\r\n",
-            connectionHandle, writeCh, notifyCh, type);
+        String cmd = String.format("AT+TRX_CHAN=%d,%d,%d,%d\r\n",connectionHandle, writeCh, notifyCh, type);
         Log.i(TAG, "[AT CMD] >>> " + cmd.trim());
         int ret = At.Lib_ComSend(cmd.getBytes(), cmd.length());
         Log.d(TAG, "[AT CMD] Lib_ComSend returned: " + ret);
@@ -303,7 +1070,7 @@ public class BleConnection {
         // Receive response
         byte[] response = new byte[256];
         int[] len = new int[1];
-        ret = At.Lib_ComRecvAT(response, len, 3000, 256);
+        ret = At.Lib_ComRecvAT(response, len, 2000, 3000);
         Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + len[0]);
 
         String responseStr = new String(response, 0, len[0]);
@@ -339,7 +1106,7 @@ public class BleConnection {
         // Wait for "INPUT_BLE_DATA:" prompt or direct OK
         byte[] response = new byte[256];
         int[] len = new int[1];
-        ret = At.Lib_ComRecvAT(response, len, 5000, 256);
+        ret = At.Lib_ComRecvAT(response, len, 1000, 256);
         Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + len[0]);
 
         String responseStr = new String(response, 0, len[0]);
@@ -390,7 +1157,7 @@ public class BleConnection {
         Log.d(TAG, "Waiting to receive data (timeout: " + timeout + "ms)");
         byte[] response = new byte[2048];
         int[] len = new int[1];
-        int ret = At.Lib_ComRecvAT(response, len, timeout, 2048);
+        int ret = At.Lib_ComRecvAT(response, len, timeout, 200);
         Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + len[0]);
 
         if (ret != 0) {
@@ -436,6 +1203,7 @@ public class BleConnection {
     // Parse connect response to extract handle
     private Integer parseConnectResponse(String response) {
         // Pattern: "[MAC] CONNECTED [handle]" or "CONNECTED [handle]"
+        Log.d(TAG, "Connect Return String: " + response);
         Pattern pattern = Pattern.compile("CONNECTED\\s+(\\d+)");
         Matcher matcher = pattern.matcher(response);
 
@@ -468,9 +1236,9 @@ public class BleConnection {
         }
         
         // Receive response
-        byte[] response = new byte[256];
+        byte[] response = new byte[2048];
         int[] len = new int[1];
-        ret = At.Lib_ComRecvAT(response, len, 3000, 256);
+        ret = At.Lib_ComRecvAT(response, len, 3000, 2048);
         Log.d(TAG, "[AT CMD] Lib_ComRecvAT returned: " + ret + ", length: " + len[0]);
         
         if (ret != 0 || len[0] == 0) {
@@ -517,6 +1285,7 @@ public class BleConnection {
         List<UuidChannel> channels = new ArrayList<>();
 
         // Pattern: "-CHAR:[num] UUID:[uuid],[properties];"
+        // Support for 128-bit UUIDs with hyphens
         Pattern pattern = Pattern.compile("-CHAR:(\\d+)\\s+UUID:([^,]+),([^;]+);");
         Matcher matcher = pattern.matcher(response);
 
@@ -525,9 +1294,14 @@ public class BleConnection {
                 int channelNum = Integer.parseInt(matcher.group(1));
                 String uuid = matcher.group(2).trim();
                 String properties = matcher.group(3).trim();
+                
+                // Log the full UUID for debugging - very important for 128-bit UUIDs
+                Log.d(TAG, "Found UUID channel: CH" + channelNum + ", UUID:" + uuid + ", Properties:" + properties);
+                
                 channels.add(new UuidChannel(channelNum, uuid, properties));
             } catch (Exception e) {
                 Log.e(TAG, "Failed to parse UUID channel: " + e.getMessage());
+                Log.e(TAG, "Raw match: " + matcher.group(0));
             }
         }
 
@@ -536,6 +1310,8 @@ public class BleConnection {
 
     // Parse received data from response
     private byte[] parseReceivedData(String response) {
+        Log.d(TAG, "Raw response for parsing: " + response.replace("\r\n", "\\r\\n"));
+        
         // Look for AT+SEND response pattern: "+RECEIVED:<handle>,<length> <data> OK"
         // Example: "+RECEIVED:1,10 OUTPUT_BLE_DATA 123456789A OK"
         Pattern pattern = Pattern.compile("\\+RECEIVED:([0-9]+),([0-9]+)\\s+([^\\r\\n]+)\\s+OK");
@@ -543,7 +1319,20 @@ public class BleConnection {
 
         if (matcher.find()) {
             String data = matcher.group(3);
+            Log.d(TAG, "✓ Parsed +RECEIVED data: " + data);
             return data.getBytes();
+        }
+
+        // Handle JSON response from mCandle BLE App
+        if (response.contains("{") && response.contains("}")) {
+            // Extract JSON part from response
+            int startIndex = response.indexOf("{");
+            int endIndex = response.lastIndexOf("}") + 1;
+            if (startIndex < endIndex) {
+                String jsonData = response.substring(startIndex, endIndex);
+                Log.d(TAG, "✓ Parsed JSON response: " + jsonData);
+                return jsonData.getBytes();
+            }
         }
 
         // Also check for direct data response without prefix
@@ -552,10 +1341,19 @@ public class BleConnection {
             int okIndex = response.indexOf("OK");
             String data = response.substring(0, okIndex).trim();
             if (!data.isEmpty()) {
+                Log.d(TAG, "✓ Parsed direct data: " + data);
                 return data.getBytes();
             }
         }
+        
+        // If no parsing succeeded, return raw response if it has content
+        response = response.trim();
+        if (!response.isEmpty()) {
+            Log.d(TAG, "✓ Returning raw response: " + response);
+            return response.getBytes();
+        }
 
+        Log.w(TAG, "No data parsed from response");
         return null;
     }
 
