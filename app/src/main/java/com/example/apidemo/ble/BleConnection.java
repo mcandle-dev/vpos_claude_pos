@@ -722,25 +722,28 @@ public class BleConnection {
             if (writeChannel == null || notifyChannel == null) {
                 Log.d(TAG, "→ Step 2: FFF1/FFF2 not found, searching for 128-bit custom UUIDs...");
 
-                // Helper: Check if UUID is a standard 16-bit service (e.g., 0000XXXX-0000-1000-8000-00805f9b34fb)
-                // Standard UUIDs have pattern: 0000[2A/2B]XX-0000-1000-8000-00805f9b34fb
+                // Helper: Detect standard vs custom UUIDs
+                // - Standard 16-bit UUIDs are stored as 4-character shorthand (e.g., "052A", "292B")
+                // - Custom 128-bit UUIDs are stored as 32-character hex (e.g., "2581E88C...")
                 for (UuidChannel channel : channels) {
-                    String uuidLower = channel.uuid.toLowerCase().replaceAll("-", "");
+                    String uuidClean = channel.uuid.replaceAll("-", "").toLowerCase();
 
-                    // Check if it's a standard Bluetooth SIG UUID (starts with 0000 and has base UUID)
-                    boolean isStandardUuid = uuidLower.matches("0000[0-9a-f]{4}00001000800000805f9b34fb");
+                    // Strategy 1: Check UUID length
+                    // If less than 32 characters, it's a shorthand 16-bit standard UUID
+                    boolean isShorthandUuid = uuidClean.length() < 32;
 
-                    // Additionally exclude known standard prefixes
-                    boolean isStandard16bit = uuidLower.startsWith("00002a") || // Standard characteristics
-                                             uuidLower.startsWith("00002b") || // GATT services
-                                             uuidLower.startsWith("00001800") || // Generic Access
-                                             uuidLower.startsWith("00001801") || // Generic Attribute
-                                             uuidLower.startsWith("0000180a") || // Device Information
-                                             uuidLower.startsWith("0000180f");   // Battery Service
+                    // Strategy 2: For 32-char UUIDs, check if it follows standard pattern
+                    // Standard: 0000XXXX-0000-1000-8000-00805f9b34fb (32 chars without hyphens)
+                    boolean isStandardPattern = false;
+                    if (uuidClean.length() == 32) {
+                        isStandardPattern = uuidClean.matches("0000[0-9a-f]{4}00001000800000805f9b34fb");
+                    }
 
-                    if (isStandardUuid || isStandard16bit) {
+                    // Combined check: Skip if standard UUID
+                    if (isShorthandUuid || isStandardPattern) {
                         Log.d(TAG, "  - Skipping standard UUID: CH" + channel.channelNum +
-                              ", UUID:" + channel.uuid + " (not custom)");
+                              ", UUID:" + channel.uuid + " (" +
+                              (isShorthandUuid ? "16-bit shorthand" : "16-bit extended") + ")");
                         continue;
                     }
 
@@ -748,30 +751,51 @@ public class BleConnection {
                     Log.d(TAG, "  - Found custom 128-bit UUID: CH" + channel.channelNum +
                           ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
 
-                    // Select TX channel: prioritize Write / Write Without Response
-                    if (writeChannel == null) {
-                        if (channel.properties.contains("Write Without Response") ||
-                            channel.properties.contains("Write")) {
+                    // Select TX channel with smart prioritization
+                    // Priority 1: Write channels WITHOUT Notify/Indicate (pure TX channels like CH35)
+                    // Priority 2: Write channels WITH Notify/Indicate (like CH34, as fallback)
+                    boolean hasWrite = channel.properties.contains("Write Without Response") ||
+                                      channel.properties.contains("Write");
+                    boolean hasNotify = channel.properties.contains("Notify") ||
+                                       channel.properties.contains("Indicate");
+
+                    if (hasWrite) {
+                        // Strategy: Always prefer pure TX channels (Write only, no Notify/Indicate)
+                        if (!hasNotify) {
+                            // This is a pure TX channel - use it immediately, even if we already have a candidate
+                            if (writeChannel != null) {
+                                Log.d(TAG, "  - Replacing previous TX candidate with pure TX channel");
+                            }
                             writeChannel = channel;
-                            Log.d(TAG, "✓ Selected custom TX channel: CH" + channel.channelNum +
+                            Log.d(TAG, "✓ Selected pure TX channel (Write only): CH" + channel.channelNum +
+                                  ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                        } else if (writeChannel == null) {
+                            // This channel has both Write and Notify/Indicate
+                            // Only use it tentatively if we haven't found any TX channel yet
+                            writeChannel = channel;
+                            Log.d(TAG, "✓ Tentatively selected TX channel (has RX properties): CH" + channel.channelNum +
                                   ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
                         }
                     }
 
                     // Select RX channel: prioritize Notify / Indicate
+                    // Important: Skip channel if already selected as TX
                     if (notifyChannel == null) {
                         if (channel.properties.contains("Notify") ||
                             channel.properties.contains("Indicate")) {
-                            notifyChannel = channel;
-                            Log.d(TAG, "✓ Selected custom RX channel: CH" + channel.channelNum +
-                                  ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                            // Don't reuse TX channel for RX
+                            if (writeChannel == null || channel.channelNum != writeChannel.channelNum) {
+                                notifyChannel = channel;
+                                Log.d(TAG, "✓ Selected custom RX channel: CH" + channel.channelNum +
+                                      ", UUID:" + channel.uuid + ", Properties:" + channel.properties);
+                            } else {
+                                Log.d(TAG, "  - Skipping CH" + channel.channelNum + " for RX (already selected as TX)");
+                            }
                         }
                     }
 
-                    // Break early if both channels found
-                    if (writeChannel != null && notifyChannel != null) {
-                        break;
-                    }
+                    // Continue scanning to find better candidates (don't break early)
+                    // This ensures we find pure TX channel (CH35) even if mixed channel (CH34) comes first
                 }
             }
             
@@ -799,18 +823,16 @@ public class BleConnection {
 
                 // Last resort: Find ANY channel with Notify/Indicate (but still exclude standard UUIDs)
                 for (UuidChannel channel : channels) {
-                    String uuidLower = channel.uuid.toLowerCase().replaceAll("-", "");
+                    String uuidClean = channel.uuid.replaceAll("-", "").toLowerCase();
 
-                    // Skip standard UUIDs even in final fallback
-                    boolean isStandardUuid = uuidLower.matches("0000[0-9a-f]{4}00001000800000805f9b34fb");
-                    boolean isStandard16bit = uuidLower.startsWith("00002a") ||
-                                             uuidLower.startsWith("00002b") ||
-                                             uuidLower.startsWith("00001800") ||
-                                             uuidLower.startsWith("00001801") ||
-                                             uuidLower.startsWith("0000180a") ||
-                                             uuidLower.startsWith("0000180f");
+                    // Skip standard UUIDs even in final fallback (same logic as Step 2)
+                    boolean isShorthandUuid = uuidClean.length() < 32;
+                    boolean isStandardPattern = false;
+                    if (uuidClean.length() == 32) {
+                        isStandardPattern = uuidClean.matches("0000[0-9a-f]{4}00001000800000805f9b34fb");
+                    }
 
-                    if (isStandardUuid || isStandard16bit) {
+                    if (isShorthandUuid || isStandardPattern) {
                         continue; // Skip standard UUIDs
                     }
 
